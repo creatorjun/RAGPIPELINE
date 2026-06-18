@@ -15,69 +15,91 @@ Rules:
 2. Remove sections that are not related.
 3. If no relevant sections exist, output only the word: NONE
 4. Preserve Markdown formatting.
-5. Output pure Markdown — do NOT wrap the output in code fences (```markdown, ```yaml, etc.).
+5. Output pure Markdown - do NOT wrap the output in code fences.
 
 [Document]
 {content}"""
 
-_REFINE_SYSTEM = """You are an expert technical editor who converts internal technical documents into Markdown optimized for RAG (Retrieval-Augmented Generation) search systems.
-
-Output format rules:
-1. The very first block MUST be a YAML front-matter block that starts with "---" and ends with "---".
-2. Do NOT wrap the entire output in code fences (```markdown, ```yaml, etc.).
-3. Output ONLY pure Markdown text.
+_REFINE_SYSTEM = """You are an expert technical editor converting internal documents into RAG-optimized Markdown.
 
 Absolute prohibitions:
-1. Do NOT add any content, numbers, dates, or version info that does not exist in the source document.
-2. Do NOT modify code blocks, commands, or formulas from the source.
-3. Do NOT change or omit factual relationships from the source.
-4. Do NOT insert dates or numbers found inside [web ref ...] tags into the body text.
-5. [web ref ...] tags are for citation only — never use their dates or numbers in the body.
+- Do NOT add content, numbers, dates, or versions not present in the source.
+- Do NOT modify code blocks, commands, or formulas.
+- Do NOT change or omit facts from the source.
+- Do NOT use dates or numbers from [web ref ...] tags in the body text.
 
-Internal glossary:
-- RCA: Root Cause Analysis
-- SRE: Site Reliability Engineering
-- MTTR: Mean Time To Recovery
-- PROD: Production Environment"""
+Internal glossary: RCA=Root Cause Analysis, SRE=Site Reliability Engineering, MTTR=Mean Time To Recovery, PROD=Production Environment"""
 
-_REFINE_USER_TEMPLATE = """Convert the source document below into a RAG-optimized Markdown document.
+_REFINE_USER_TEMPLATE = """Convert the source document into a RAG-optimized Markdown document.
 
-YAML front-matter fields (ALL required):
-- title: clear descriptive title (string)
-- domain: {domains_yaml}
-- doc_type: one of runbook | architecture | troubleshooting | policy | procedure | reference
-- keywords: MUST include all of the following original keywords, then add more as needed: {required_keywords}
-- summary: 1-2 sentence summary (string)
-- source_file: {source_file}
-- refined_at: {today}
+Required YAML front-matter fields:
+  title: <descriptive title>
+  domain: {domains_yaml}
+  doc_type: <runbook|architecture|troubleshooting|policy|procedure|reference>
+  keywords:
+    - <keyword1>
+    - <keyword2>  # MUST include: {required_keywords}
+  summary: <1-2 sentence summary>
+  source_file: {source_file}
+  refined_at: {today}
 
-Structure conversion rules:
-1. Use exactly one H1 heading.
-2. Reorganize content under independent H2 sections.
-3. Remove citation/reference expressions.
-4. Convert passive voice to active voice.
-5. Make implicit knowledge explicit.
-6. Remove duplicates.
-7. Write out acronyms in full on first use.
-8. Remove [web ref ...] tags from the body; do NOT add their dates or numbers to the body.
+Structure rules:
+- One H1 heading only.
+- Reorganize content under H2 sections (at least one H2 required).
+- Remove citation expressions and [web ref ...] tags.
+- Convert passive to active voice.
+- Make implicit knowledge explicit.
+- Remove duplicates.
+- Write acronyms in full on first use.
+
+Example of required output format:
+---
+title: Example Document Title
+domain:
+  - incident
+doc_type: runbook
+keywords:
+  - keyword_a
+  - keyword_b
+summary: One or two sentence summary here.
+source_file: example.md
+refined_at: 2026-01-01
+---
+
+# Example Document Title
+
+## Section One
+
+Body text here.
+
+## Section Two
+
+More body text.
+---END EXAMPLE---
+
+Now convert the following source document. Start your output with the line: ---
 
 [Source Document]
 {content}"""
 
-_REFINE_PREFIX = "---\n"
-
+_CHANNEL_THOUGHT_PATTERN = re.compile(
+    r'<\|channel[^>]*>thought.*?(?=---)|(^.*?(?=---))',
+    re.DOTALL,
+)
 _CODEFENCE_PATTERN = re.compile(
     r'^```[^\n]*\n(.*?)```\s*$',
     re.DOTALL,
 )
 _THINK_PATTERN = re.compile(r'<think>.*?</think>', re.DOTALL)
+_GENERIC_TAG_PATTERN = re.compile(r'<\|[^>]+>', re.DOTALL)
 _KEYWORDS_FIELD_PATTERN = re.compile(
     r'(?m)^keywords:\s*\n((?:[ \t]*-[^\n]*\n)+)',
 )
 
 
 def _parse_llm_output(raw: str) -> str:
-    cleaned = _THINK_PATTERN.sub('', raw).strip()
+    cleaned = _THINK_PATTERN.sub('', raw)
+    cleaned = _GENERIC_TAG_PATTERN.sub('', cleaned).strip()
 
     m = _CODEFENCE_PATTERN.match(cleaned)
     if m:
@@ -86,8 +108,10 @@ def _parse_llm_output(raw: str) -> str:
     fm_pos = cleaned.find('---')
     if fm_pos > 0:
         cleaned = cleaned[fm_pos:]
+    elif fm_pos == -1:
+        pass
 
-    return cleaned
+    return cleaned.strip()
 
 
 def _extract_original_keywords(doc: Document) -> List[str]:
@@ -157,7 +181,7 @@ class Refiner:
             content=chunk.content,
             required_keywords=kw_hint,
         )
-        raw = self._llm.generate(_REFINE_SYSTEM, user_prompt, prefix=_REFINE_PREFIX)
+        raw = self._llm.generate(_REFINE_SYSTEM, user_prompt)
         result = _parse_llm_output(raw)
         if required_keywords:
             result = _ensure_keywords_present(result, required_keywords)
