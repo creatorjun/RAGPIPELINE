@@ -42,11 +42,13 @@ class ProgressReporter:
         eta = self._eta()
         eta_str = f" ETA {eta}" if eta else ""
         bar_filled = int(pct / 5)
-        bar = "█" * bar_filled + "░" * (20 - bar_filled)
+        bar = "\u2588" * bar_filled + "\u2591" * (20 - bar_filled)
         line = (
             f"\r[{bar}] {pct:5.1f}%  "
             f"{self._done}/{self._total}  "
-            f✔️{self._success} ⏭️{self._skip} ❌{self._fail}"
+            f"\u2714\ufe0f{self._success} "
+            f"\u23ed\ufe0f{self._skip} "
+            f"\u274c{self._fail}"
             f"{eta_str}   "
         )
         sys.stdout.write(line)
@@ -63,12 +65,12 @@ class ProgressReporter:
         avg = elapsed / self._done if self._done else 0.0
 
         print("\n" + "=" * 52)
-        print("  실행 완료 요약")
+        print("  \uc2e4\ud589 \uc644\ub8cc \uc694\uc57d")
         print("=" * 52)
-        print(f"  전체 문서  : {self._total}건")
-        print(f"  성공        : {self._success}건")
-        print(f"  스킵        : {self._skip}건")
-        print(f"  실패        : {self._fail}건")
-        print(f"  소요 시간  : {elapsed_str}")
-        print(f"  평균 처리  : {avg:.1f}초/건")
+        print(f"  \uc804\uccb4 \ubb38\uc11c  : {self._total}\uac74")
+        print(f"  \uc131\uacf5        : {self._success}\uac74")
+        print(f"  \uc2a4\ud0b5        : {self._skip}\uac74")
+        print(f"  \uc2e4\ud328        : {self._fail}\uac74")
+        print(f"  \uc18c\uc694 \uc2dc\uac04  : {elapsed_str}")
+        print(f"  \ud3c9\uade0 \ucc98\ub9ac  : {avg:.1f}\ucd08/\uac74")
         print("=" * 52)
