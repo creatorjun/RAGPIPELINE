@@ -38,11 +38,12 @@ class RagEngine:
             reranker_model=config.rag.reranker_model,
         )
         self._llm = LLMClient(
-            model_path=config.model.path,
+            base_url=config.model.base_url,
+            api_key=config.model.api_key,
+            model_name=config.model.model_name,
             max_tokens=config.rag.answer_max_tokens,
             temperature=config.model.temperature,
             top_p=config.model.top_p,
-            repetition_penalty=config.model.repetition_penalty,
         )
         self._generator = AnswerGenerator(self._llm)
 
