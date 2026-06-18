@@ -53,6 +53,7 @@ def chunk_document(path: Path) -> List[RagChunk]:
     raw_keywords = meta.get("keywords", [])
     keywords: List[str] = raw_keywords if isinstance(raw_keywords, list) else [raw_keywords]
     summary = meta.get("summary", "")
+    refined_at = str(meta.get("refined_at", ""))
 
     sections = [s for s in _H2_SPLIT_RE.split(body) if s.strip()]
     if not sections:
@@ -71,7 +72,7 @@ def chunk_document(path: Path) -> List[RagChunk]:
             doc_type=doc_type,
             keywords=keywords,
             summary=summary,
-            title=doc_title,
+            refined_at=refined_at,
         ))
     return chunks
 
