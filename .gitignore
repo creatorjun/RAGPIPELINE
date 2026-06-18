@@ -1,0 +1,11 @@
+venv/
+env/
+build/
+dist/
+as_is/
+to_be/
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
