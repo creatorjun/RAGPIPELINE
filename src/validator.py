@@ -6,7 +6,7 @@ from src.models import ValidationResult
 
 _NUM_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\b")
 _VER_PATTERN = re.compile(r"v?\d+\.\d+(?:\.\d+)?")
-_CODE_PATTERN = re.compile(r"`[^`]{2,30}`")
+_CODE_PATTERN = re.compile(r"`[^`\n\r]{2,30}`")
 _H2_PATTERN = re.compile(r"(?m)^## ")
 _HALLUC_NUM_PATTERN = re.compile(r"\b\d{4,}\b")
 _WEB_REF_PATTERN = re.compile(r"\[웹 참조[^\]]*\]")

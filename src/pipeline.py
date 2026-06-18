@@ -10,7 +10,7 @@ from typing import List, Optional, Set
 
 from src.config import AppConfig
 from src.domain_filter import DomainFilter
-from src.llm_client import LLMClient
+from src.llm_client import LLMClient, LLMEmptyResponseError
 from src.loader import load_all_documents, load_document
 from src.models import Document
 from src.progress import ProgressReporter
@@ -96,6 +96,7 @@ class PipelineOrchestrator:
             "tokens_out": 0,
             "duration_sec": 0.0,
             "error": None,
+            "llm_raw_preview": None,
         }
         self._write_log(log_entry)
 
@@ -141,7 +142,32 @@ class PipelineOrchestrator:
 
             for attempt in range(max_retries + 1):
                 log_entry["stage"] = "refine"
-                refined_text = self._refiner.refine_document(working_doc, filter_result.domains)
+                try:
+                    refined_text = self._refiner.refine_document(working_doc, filter_result.domains)
+                except LLMEmptyResponseError as e:
+                    print(f"\n[ERROR] {doc.source_file} — LLM 빈 응답: {e}")
+                    log_entry["llm_raw_preview"] = f"EMPTY (attempt={attempt})"
+                    if attempt < max_retries:
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — LLM 응답 없음, 재시도")
+                        continue
+                    log_entry["status"] = "fail"
+                    log_entry["error"] = str(e)
+                    log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
+                    self._write_log(log_entry)
+                    return "fail"
+
+                log_entry["llm_raw_preview"] = refined_text[:200] if refined_text else "(empty)"
+
+                if not refined_text.strip():
+                    print(f"\n[ERROR] {doc.source_file} — refine 결과 빈 문자열")
+                    if attempt < max_retries:
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — 재시도")
+                        continue
+                    log_entry["status"] = "fail"
+                    log_entry["error"] = "refine 결과 빈 문자열"
+                    log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
+                    self._write_log(log_entry)
+                    return "fail"
 
                 log_entry["stage"] = "validate"
                 validation = self._validator.validate_strict(doc.content, refined_text)

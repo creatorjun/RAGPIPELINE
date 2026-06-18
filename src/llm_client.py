@@ -4,6 +4,10 @@ from __future__ import annotations
 from openai import OpenAI
 
 
+class LLMEmptyResponseError(RuntimeError):
+    pass
+
+
 class LLMClient:
     def __init__(
         self,
@@ -31,5 +35,10 @@ class LLMClient:
             temperature=self._temperature,
             top_p=self._top_p,
         )
-        content = response.choices[0].message.content or ""
-        return content.strip()
+        finish_reason = response.choices[0].finish_reason
+        content = (response.choices[0].message.content or "").strip()
+        if not content:
+            raise LLMEmptyResponseError(
+                f"LLM 빈 응답 (finish_reason={finish_reason})"
+            )
+        return content
