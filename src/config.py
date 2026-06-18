@@ -24,6 +24,8 @@ class PipelineConfig(BaseModel):
     keyword_retention_threshold: float = 0.7
     min_sections: int = 1
     min_doc_length: int = 200
+    resume: bool = True
+    concurrency: int = 1
 
 
 class DomainConfig(BaseModel):
