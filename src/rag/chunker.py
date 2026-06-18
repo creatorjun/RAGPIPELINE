@@ -2,7 +2,7 @@
 import re
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import yaml
 
@@ -46,9 +46,12 @@ def chunk_document(path: Path) -> List[RagChunk]:
 
     meta, body = _parse_frontmatter(text)
     source_file = meta.get("source_file", path.name)
-    domains = meta.get("domain", [])
+    doc_title = meta.get("title", path.stem)
+    raw_domain = meta.get("domain", [])
+    domains: List[str] = raw_domain if isinstance(raw_domain, list) else [raw_domain]
     doc_type = meta.get("doc_type", "")
-    keywords = meta.get("keywords", [])
+    raw_keywords = meta.get("keywords", [])
+    keywords: List[str] = raw_keywords if isinstance(raw_keywords, list) else [raw_keywords]
     summary = meta.get("summary", "")
 
     sections = [s for s in _H2_SPLIT_RE.split(body) if s.strip()]
@@ -57,17 +60,18 @@ def chunk_document(path: Path) -> List[RagChunk]:
 
     chunks: List[RagChunk] = []
     for section in sections:
-        title = _extract_section_title(section)
+        section_title = _extract_section_title(section)
         chunk_id = str(uuid.uuid4())
         chunks.append(RagChunk(
             chunk_id=chunk_id,
             source_file=source_file,
-            domain=domains if isinstance(domains, list) else [domains],
-            section_title=title,
+            domain=domains,
+            section_title=section_title,
             content=section.strip(),
             doc_type=doc_type,
-            keywords=keywords if isinstance(keywords, list) else [],
+            keywords=keywords,
             summary=summary,
+            title=doc_title,
         ))
     return chunks
 

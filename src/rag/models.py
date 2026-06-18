@@ -13,6 +13,7 @@ class RagChunk:
     doc_type: str = ""
     keywords: List[str] = field(default_factory=list)
     summary: str = ""
+    title: str = ""
 
 
 @dataclass
