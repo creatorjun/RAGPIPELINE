@@ -91,10 +91,11 @@ _GENERIC_TAG_PATTERN = re.compile(r'<\|[^>]+>', re.DOTALL)
 _KEYWORDS_FIELD_PATTERN = re.compile(
     r'(?m)^keywords:\s*\n((?:[ \t]*-[^\n]*\n)+)',
 )
+_FRONTMATTER_PATTERN = re.compile(r'^---\s*\n.*?\n---\s*\n', re.DOTALL)
+_H1_PATTERN = re.compile(r'(?m)^# .+$')
 
 
 def _strip_thinking_preamble(text: str) -> str:
-    """---이 나오기 전의 모든 내용(thinking 잔재 포함)을 제거한다."""
     idx = text.find('---')
     if idx == -1:
         return text
@@ -128,8 +129,30 @@ def _parse_llm_output(raw: str) -> str:
         cleaned = m.group(1).strip()
 
     cleaned = _strip_thinking_preamble(cleaned)
-
     return cleaned.strip()
+
+
+def _extract_frontmatter_block(text: str) -> str:
+    """YAML front-matter 블록 전체를 반환 (--- ... --- 포함)."""
+    m = _FRONTMATTER_PATTERN.match(text.lstrip())
+    return m.group(0) if m else ""
+
+
+def _strip_frontmatter(text: str) -> str:
+    """첫 번째 YAML front-matter 블록을 제거한 본문만 반환."""
+    stripped = text.lstrip()
+    m = _FRONTMATTER_PATTERN.match(stripped)
+    if m:
+        return stripped[m.end():]
+    return stripped
+
+
+def _strip_first_h1(text: str) -> str:
+    """본문 첫 번째 H1만 제거 (중복 합산 방지)."""
+    m = _H1_PATTERN.search(text)
+    if m:
+        return text[:m.start()] + text[m.end():].lstrip('\n')
+    return text
 
 
 def _extract_original_keywords(doc: Document) -> List[str]:
@@ -219,26 +242,16 @@ class Refiner:
             merged = refined_chunks[0]
         else:
             head = refined_chunks[0]
-            body_parts: List[str] = []
+            frontmatter = _extract_frontmatter_block(head)
+            head_body = _strip_frontmatter(head)
+
+            body_parts: List[str] = [head_body.strip()]
             for subsequent in refined_chunks[1:]:
-                lines = subsequent.splitlines()
-                skip = False
-                cleaned_lines: List[str] = []
-                fence_count = 0
-                for line in lines:
-                    if line.strip() == "---":
-                        fence_count += 1
-                        if fence_count <= 2:
-                            skip = True
-                            continue
-                        else:
-                            skip = False
-                            continue
-                    if skip:
-                        continue
-                    cleaned_lines.append(line)
-                body_parts.append("\n".join(cleaned_lines))
-            merged = head + "\n\n" + "\n\n".join(body_parts)
+                body_only = _strip_frontmatter(subsequent)
+                body_only = _strip_first_h1(body_only)
+                body_parts.append(body_only.strip())
+
+            merged = frontmatter + "\n".join(body_parts)
 
         if self._augmenter is not None:
             merged = self._augmenter.augment(merged, doc.source_file)
