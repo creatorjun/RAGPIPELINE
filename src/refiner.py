@@ -77,15 +77,11 @@ Body text here.
 More body text.
 ---END EXAMPLE---
 
-Now convert the following source document. Start your output with the line: ---
+Now convert the following source document. Output ONLY the converted document starting with ---. Do not include any preamble, explanation, or thinking text before the --- line.
 
 [Source Document]
 {content}"""
 
-_CHANNEL_THOUGHT_PATTERN = re.compile(
-    r'<\|channel[^>]*>thought.*?(?=---)|(^.*?(?=---))',
-    re.DOTALL,
-)
 _CODEFENCE_PATTERN = re.compile(
     r'^```[^\n]*\n(.*?)```\s*$',
     re.DOTALL,
@@ -97,19 +93,41 @@ _KEYWORDS_FIELD_PATTERN = re.compile(
 )
 
 
+def _strip_thinking_preamble(text: str) -> str:
+    """---이 나오기 전의 모든 내용(thinking 잔재 포함)을 제거한다."""
+    idx = text.find('---')
+    if idx == -1:
+        return text
+    candidate = text[idx:]
+    if candidate.startswith('---\n') or candidate.startswith('---\r\n'):
+        return candidate
+    next_idx = text.find('---', idx + 3)
+    if next_idx != -1:
+        candidate2 = text[next_idx:]
+        if candidate2.startswith('---\n') or candidate2.startswith('---\r\n'):
+            return candidate2
+    return candidate
+
+
 def _parse_llm_output(raw: str) -> str:
     cleaned = _THINK_PATTERN.sub('', raw)
-    cleaned = _GENERIC_TAG_PATTERN.sub('', cleaned).strip()
+    cleaned = _GENERIC_TAG_PATTERN.sub('', cleaned)
+
+    lines = cleaned.splitlines()
+    trimmed_lines: List[str] = []
+    found_fence = False
+    for line in lines:
+        if not found_fence and line.strip() in ('', 'thought', 'model', 'user'):
+            continue
+        found_fence = True
+        trimmed_lines.append(line)
+    cleaned = '\n'.join(trimmed_lines).strip()
 
     m = _CODEFENCE_PATTERN.match(cleaned)
     if m:
         cleaned = m.group(1).strip()
 
-    fm_pos = cleaned.find('---')
-    if fm_pos > 0:
-        cleaned = cleaned[fm_pos:]
-    elif fm_pos == -1:
-        pass
+    cleaned = _strip_thinking_preamble(cleaned)
 
     return cleaned.strip()
 
