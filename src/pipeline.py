@@ -17,7 +17,7 @@ from src.progress import ProgressReporter
 from src.refiner import Refiner
 from src.resume import load_processed_files
 from src.search_augmenter import SearchAugmenter
-from src.validator import Validator
+from src.validator import Validator, strip_thinking
 from src.web_search import SearXNGClient
 
 
@@ -169,11 +169,14 @@ class PipelineOrchestrator:
                     self._write_log(log_entry)
                     return "fail"
 
+                clean_text = strip_thinking(refined_text)
+
                 log_entry["stage"] = "validate"
-                validation = self._validator.validate_strict(doc.content, refined_text)
+                validation = self._validator.validate_strict(doc.content, clean_text)
                 log_entry["retry_count"] = attempt
 
                 if validation.is_valid:
+                    refined_text = clean_text
                     break
 
                 if attempt < max_retries:

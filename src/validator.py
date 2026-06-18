@@ -10,6 +10,22 @@ _H2_PATTERN = re.compile(r"(?m)^## ")
 _HALLUC_NUM_PATTERN = re.compile(r"\b\d{4,}\b")
 _WEB_REF_PATTERN = re.compile(r"\[웹 참조[^\]]*\]")
 _REFINED_AT_PATTERN = re.compile(r"(?m)^refined_at:\s*(\S+)")
+_THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
+_GENERIC_TAG_PATTERN = re.compile(r"<\|[^>]+>", re.DOTALL)
+
+
+def strip_thinking(text: str) -> str:
+    cleaned = _THINK_TAG_PATTERN.sub("", text)
+    cleaned = _GENERIC_TAG_PATTERN.sub("", cleaned)
+    lines = cleaned.splitlines()
+    result: List[str] = []
+    found_fence = False
+    for line in lines:
+        if not found_fence and line.strip() in ("", "thought", "model", "user"):
+            continue
+        found_fence = True
+        result.append(line)
+    return "\n".join(result).strip()
 
 
 def _normalize(text: str) -> str:
@@ -21,8 +37,8 @@ def _extract_pipeline_injected_numbers(refined_text: str) -> Set[str]:
     m = _REFINED_AT_PATTERN.search(refined_text)
     if m:
         date_str = m.group(1).strip()
-        for p in re.split(r'[-/]', date_str):
-            if re.fullmatch(r'\d{4,}', p):
+        for p in re.split(r"[-/]", date_str):
+            if re.fullmatch(r"\d{4,}", p):
                 injected.add(p)
     return injected
 
@@ -64,30 +80,30 @@ class Validator:
         warnings: List[str] = []
         missing_keywords: List[str] = []
 
-        if not _has_frontmatter(refined_text):
+        text = strip_thinking(refined_text)
+
+        if not _has_frontmatter(text):
             errors.append("YAML front-matter 없음")
 
-        missing_fields = _check_required_fields(refined_text)
+        missing_fields = _check_required_fields(text)
         if missing_fields:
             errors.append(f"필수 필드 누락: {missing_fields}")
 
-        body_start = refined_text.find("---", 3)
-        body = refined_text[body_start + 3:] if body_start != -1 else refined_text
+        body_start = text.find("---", 3)
+        body = text[body_start + 3:] if body_start != -1 else text
         if len(body.strip()) < self._min_length:
             errors.append(f"본문 길이 부족: {len(body.strip())}자 (최소 {self._min_length}자)")
 
-        h2_count = len(_H2_PATTERN.findall(refined_text))
+        h2_count = len(_H2_PATTERN.findall(text))
         if h2_count < self._min_sections:
             errors.append(f"H2 섹션 부족: {h2_count}개 (최소 {self._min_sections}개)")
 
         original_keywords = _extract_keywords(original_text)
         if original_keywords:
-            refined_normalized = _normalize(refined_text)
+            refined_normalized = _normalize(text)
             retained_kws = {kw for kw in original_keywords if kw in refined_normalized}
             missing_kws = original_keywords - retained_kws
-            retained = len(retained_kws)
-            rate = retained / len(original_keywords)
-
+            rate = len(retained_kws) / len(original_keywords)
             if rate < self._threshold:
                 missing_keywords = sorted(missing_kws)
                 errors.append(
@@ -98,10 +114,9 @@ class Validator:
             rate = 1.0
 
         orig_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(original_text)))
-        pipeline_injected = _extract_pipeline_injected_numbers(refined_text)
+        pipeline_injected = _extract_pipeline_injected_numbers(text)
         orig_nums.update(pipeline_injected)
-
-        refined_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(refined_text)))
+        refined_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(text)))
         halluc_candidates = refined_nums - orig_nums
         if halluc_candidates:
             warnings.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {sorted(halluc_candidates)}")
