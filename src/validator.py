@@ -10,10 +10,23 @@ _CODE_PATTERN = re.compile(r"`[^`]{2,30}`")
 _H2_PATTERN = re.compile(r"(?m)^## ")
 _HALLUC_NUM_PATTERN = re.compile(r"\b\d{4,}\b")
 _WEB_REF_PATTERN = re.compile(r"\[웹 참조[^\]]*\]")
+_REFINED_AT_PATTERN = re.compile(r"(?m)^refined_at:\s*(\S+)")
 
 
 def _normalize(text: str) -> str:
     return _WEB_REF_PATTERN.sub("", text)
+
+
+def _extract_pipeline_injected_numbers(refined_text: str) -> set:
+    injected: set = set()
+    m = _REFINED_AT_PATTERN.search(refined_text)
+    if m:
+        date_str = m.group(1).strip()
+        parts = re.split(r'[-/]', date_str)
+        for p in parts:
+            if re.fullmatch(r'\d{4,}', p):
+                injected.add(p)
+    return injected
 
 
 def _extract_keywords(text: str) -> set:
@@ -78,6 +91,9 @@ class Validator:
             errors.append(f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%})")
 
         orig_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(original_text)))
+        pipeline_injected = _extract_pipeline_injected_numbers(refined_text)
+        orig_nums.update(pipeline_injected)
+
         refined_nums = set(_HALLUC_NUM_PATTERN.findall(refined_normalized))
         halluc_candidates = refined_nums - orig_nums
         if halluc_candidates:
