@@ -1,5 +1,4 @@
 # src/config.py
-from pathlib import Path
 from typing import List, Optional
 
 import yaml
@@ -34,11 +33,26 @@ class DomainConfig(BaseModel):
     keywords: List[str] = Field(default_factory=list)
 
 
+class RagConfig(BaseModel):
+    embedding_model: str = "BAAI/bge-m3"
+    qdrant_path: str = "./qdrant_db"
+    collection_name: str = "rag_docs"
+    chunk_size_h2: bool = True
+    top_k_dense: int = 10
+    top_k_bm25: int = 10
+    top_k_rerank: int = 5
+    rrf_k: int = 60
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    answer_max_tokens: int = 2048
+    bm25_index_path: str = "./qdrant_db/bm25_index.pkl"
+
+
 class AppConfig(BaseModel):
     model: ModelConfig
     pipeline: PipelineConfig
     domains: List[DomainConfig]
     glossary_path: str = "./glossary.yaml"
+    rag: RagConfig = Field(default_factory=RagConfig)
 
     @classmethod
     def from_yaml(cls, path: str = "config.yaml") -> "AppConfig":

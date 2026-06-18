@@ -51,3 +51,16 @@ domains:
       - 대응
 
 glossary_path: ./glossary.yaml
+
+rag:
+  embedding_model: BAAI/bge-m3
+  qdrant_path: ./qdrant_db
+  collection_name: rag_docs
+  chunk_size_h2: true
+  top_k_dense: 10
+  top_k_bm25: 10
+  top_k_rerank: 5
+  rrf_k: 60
+  reranker_model: BAAI/bge-reranker-v2-m3
+  answer_max_tokens: 2048
+  bm25_index_path: ./qdrant_db/bm25_index.pkl
