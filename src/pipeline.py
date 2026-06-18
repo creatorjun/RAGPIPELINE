@@ -111,7 +111,7 @@ class PipelineOrchestrator:
                 return "skip"
 
             if filter_result.confidence < 0.7:
-                print(f"\n[WARN] {doc.source_file} — 분류 신뢰도 낮음: {filter_result.confidence:.2f}")
+                print(f"\n[WARN] {doc.source_file} — 분류 신뢰도 낙음: {filter_result.confidence:.2f}")
 
             working_doc = doc
             if filter_result.is_partial:
@@ -137,21 +137,21 @@ class PipelineOrchestrator:
 
             refined_text = ""
             validation = None
-            retry = 0
             max_retries = self._cfg.pipeline.max_retries
 
-            while retry <= max_retries:
+            for attempt in range(max_retries + 1):
                 log_entry["stage"] = "refine"
                 refined_text = self._refiner.refine_document(working_doc, filter_result.domains)
 
                 log_entry["stage"] = "validate"
                 validation = self._validator.validate_strict(doc.content, refined_text)
+                log_entry["retry_count"] = attempt
 
                 if validation.is_valid:
                     break
 
-                retry += 1
-                log_entry["retry_count"] = retry
+                if attempt < max_retries:
+                    print(f"\n[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — {validation.errors}")
 
             log_entry["keyword_retention_rate"] = validation.keyword_retention_rate if validation else 0.0
 

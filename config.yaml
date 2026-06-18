@@ -2,7 +2,7 @@ model:
   base_url: "http://0.0.0.0:8000/v1"
   api_key: "sk-no-key-required"
   model_name: "mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit"
-  max_tokens: 4096
+  max_tokens: 2048
   temperature: 0.1
   top_p: 0.9
 
@@ -10,13 +10,13 @@ pipeline:
   input_dir: ./as_is
   output_dir: ./to_be
   log_dir: ./logs
-  max_chunk_tokens: 8000
+  max_chunk_tokens: 3000
   overlap_tokens: 200
   max_retries: 2
   keyword_retention_threshold: 0.7
   min_sections: 1
   min_doc_length: 200
-  resume: true
+  resume: false
   concurrency: 1
 
 search:
