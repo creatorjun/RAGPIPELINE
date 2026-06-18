@@ -20,6 +20,17 @@ from src.search_augmenter import SearchAugmenter
 from src.validator import Validator, strip_thinking
 from src.web_search import SearXNGClient
 
+try:
+    import tiktoken
+    _ENC = tiktoken.get_encoding("cl100k_base")
+
+    def _token_count(text: str) -> int:
+        return len(_ENC.encode(text))
+except ImportError:
+    def _token_count(text: str) -> int:
+        korean = sum(1 for c in text if '\uac00' <= c <= '\ud7a3')
+        return korean + (len(text) - korean) // 4
+
 
 class PipelineOrchestrator:
     def __init__(self, config: AppConfig):
@@ -76,7 +87,8 @@ class PipelineOrchestrator:
             if folder is None:
                 continue
             out_dir = Path(self._cfg.pipeline.output_dir) / folder
-            out_path = out_dir / source_file
+            stem = Path(source_file).stem + ".md"
+            out_path = out_dir / stem
             out_path.write_text(refined_text, encoding="utf-8")
             saved.append(str(out_path))
         return saved
@@ -92,7 +104,7 @@ class PipelineOrchestrator:
             "output_files": [],
             "retry_count": 0,
             "keyword_retention_rate": 0.0,
-            "tokens_in": 0,
+            "tokens_in": _token_count(doc.content),
             "tokens_out": 0,
             "duration_sec": 0.0,
             "error": None,
@@ -183,6 +195,7 @@ class PipelineOrchestrator:
                     print(f"\n[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — {validation.errors}")
 
             log_entry["keyword_retention_rate"] = validation.keyword_retention_rate if validation else 0.0
+            log_entry["tokens_out"] = _token_count(refined_text) if refined_text else 0
 
             if not validation or not validation.is_valid:
                 log_entry["status"] = "fail"
@@ -234,37 +247,26 @@ class PipelineOrchestrator:
         if dry_run:
             print(f"[DRY-RUN] 실제 실행 없이 종료 — 처리 대상 {len(docs_to_process)}건")
             for doc in docs_to_process:
-                print(f"  • {doc.source_file}")
+                print(f"  - {doc.source_file}")
             return
 
-        if not docs_to_process:
-            print("[INFO] 처리할 문서가 없습니다.")
-            return
-
-        print(f"[INFO] 처리 대상: {len(docs_to_process)}건")
         concurrency = max(1, self._cfg.pipeline.concurrency)
-        reporter = ProgressReporter(len(docs_to_process))
+        reporter = ProgressReporter(total=len(docs_to_process))
+        counts = {"success": 0, "fail": 0, "skip": 0}
 
         if concurrency == 1:
             for doc in docs_to_process:
-                status = self._process_document(doc)
-                reporter.update(status)
+                result = self._process_document(doc)
+                counts[result] = counts.get(result, 0) + 1
+                reporter.update(result)
         else:
-            with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                futures = {executor.submit(self._process_document, doc): doc for doc in docs_to_process}
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {pool.submit(self._process_document, doc): doc for doc in docs_to_process}
                 for future in as_completed(futures):
-                    status = future.result()
-                    reporter.update(status)
+                    result = future.result()
+                    counts[result] = counts.get(result, 0) + 1
+                    reporter.update(result)
 
-        reporter.print_summary()
-        self._print_domain_summary()
-
-    def _print_domain_summary(self) -> None:
-        output_base = Path(self._cfg.pipeline.output_dir)
-        print("\n  도메인별 출력 문서 수")
-        print("  " + "-" * 30)
-        for domain in self._cfg.domains:
-            folder = output_base / domain.output_folder
-            count = len(list(folder.glob("*.md"))) if folder.exists() else 0
-            print(f"  {domain.name:<15}: {count}건")
-        print()
+        reporter.close()
+        print(f"\n[DONE] 성공={counts['success']} / 실패={counts['fail']} / 스킵={counts['skip']}")
+        print(f"[INFO] 로그: {self._log_path}")
