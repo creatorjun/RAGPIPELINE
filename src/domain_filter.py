@@ -1,7 +1,7 @@
 # src/domain_filter.py
 import json
 import re
-from typing import List
+from typing import List, Optional, Tuple
 
 from src.llm_client import LLMClient
 from src.models import Document, FilterResult
@@ -12,44 +12,61 @@ Output ONLY a valid JSON object. No other text."""
 _USER_TEMPLATE = """Classify the document below into one or more of the following 3 domains.
 
 [Domain definitions]
-- build: construction, installation, design, deployment, or configuration of solutions/systems/infrastructure
-- maintenance: maintenance, monitoring, backup, performance tuning, or regular inspection of running systems
-- incident: failures, error response, recovery, rollback, root cause analysis (RCA), or incident management
+- build: construction, installation, deployment, design, infrastructure setup, environment configuration
+- maintenance: operations, monitoring, backup, tuning, optimization, routine checks
+- incident: failures, errors, recovery, rollback, RCA, incident response
 
-[Output format — JSON only]
-{{"domain": ["build"|"maintenance"|"incident"], "confidence": 0.0-1.0, "is_partial": true|false}}
+[Output format]
+{{
+  "domains": ["<domain1>", "<domain2>"],
+  "confidence": <0.0-1.0>,
+  "is_partial": <true|false>
+}}
 
-- domain array: include only matching domains
-- If none match: empty array []
-- is_partial: true if only some sections of the document are relevant
+Rules:
+- domains: list of matching domains (can be multiple). If none match, return [].
+- confidence: your overall classification confidence.
+- is_partial: true if the document contains sections from multiple domains and should be split.
 
 [Document]
-{preview}
-
-Example output:
-{{"domain": ["build", "incident"], "confidence": 0.94, "is_partial": false}}"""
-
-_PREVIEW_CHARS = 3000
-_VALID_DOMAINS = {"build", "maintenance", "incident"}
-_THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
+{content}"""
 
 
-def _extract_json(raw: str) -> dict:
-    cleaned = _THINK_PATTERN.sub("", raw).strip()
+def _extract_json_object(text: str) -> Optional[dict]:
+    """JSON 객체를 중첩 brace를 고려해 안전하게 추출한다."""
+    start = text.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start=start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    return None
+    return None
 
-    fence_m = re.search(r"```(?:json)?\s*\n?(.*?)```", cleaned, re.DOTALL)
-    if fence_m:
-        cleaned = fence_m.group(1).strip()
 
-    decoder = json.JSONDecoder()
-    for m in re.finditer(r"\{", cleaned):
-        try:
-            obj, _ = decoder.raw_decode(cleaned, m.start())
-            return obj
-        except json.JSONDecodeError:
-            continue
+def _parse_filter_response(response: str) -> Tuple[List[str], float, bool]:
+    think_cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+    data = _extract_json_object(think_cleaned)
+    if data is None:
+        return [], 0.0, False
 
-    raise ValueError(f"JSON parsing failed: {raw!r}")
+    raw_domains = data.get('domains', [])
+    if isinstance(raw_domains, str):
+        raw_domains = [raw_domains]
+    valid = {'build', 'maintenance', 'incident'}
+    domains = [d for d in raw_domains if d in valid]
+
+    confidence = float(data.get('confidence', 1.0))
+    is_partial = bool(data.get('is_partial', False))
+    return domains, confidence, is_partial
 
 
 class DomainFilter:
@@ -57,16 +74,13 @@ class DomainFilter:
         self._llm = llm
 
     def classify(self, doc: Document) -> FilterResult:
-        preview = doc.content[:_PREVIEW_CHARS]
-        user_prompt = _USER_TEMPLATE.format(preview=preview)
-        raw = self._llm.generate(_SYSTEM_PROMPT, user_prompt)
-        parsed = _extract_json(raw)
+        preview = doc.content[:4000]
+        user_prompt = _USER_TEMPLATE.format(content=preview)
+        try:
+            raw = self._llm.generate(_SYSTEM_PROMPT, user_prompt)
+        except Exception as exc:
+            print(f"[WARN] DomainFilter LLM 호출 실패 ({doc.source_file}): {exc}")
+            return FilterResult(domains=[], confidence=0.0, is_partial=False)
 
-        domains: List[str] = [
-            d.lower() for d in parsed.get("domain", [])
-            if d.lower() in _VALID_DOMAINS
-        ]
-        confidence = float(parsed.get("confidence", 0.0))
-        is_partial = bool(parsed.get("is_partial", False))
-
+        domains, confidence, is_partial = _parse_filter_response(raw)
         return FilterResult(domains=domains, confidence=confidence, is_partial=is_partial)
