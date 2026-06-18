@@ -4,7 +4,6 @@ from typing import List, Set
 
 from src.models import ValidationResult
 
-_NUM_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\b")
 _VER_PATTERN = re.compile(r"v?\d+\.\d+(?:\.\d+)?")
 _CODE_PATTERN = re.compile(r"`[^`\n\r]{2,30}`")
 _H2_PATTERN = re.compile(r"(?m)^## ")
@@ -31,7 +30,6 @@ def _extract_pipeline_injected_numbers(refined_text: str) -> Set[str]:
 def _extract_keywords(text: str) -> Set[str]:
     normalized = _normalize(text)
     keywords: Set[str] = set()
-    keywords.update(_NUM_PATTERN.findall(normalized))
     keywords.update(_VER_PATTERN.findall(normalized))
     keywords.update(m.group() for m in _CODE_PATTERN.finditer(normalized))
     return keywords
@@ -83,24 +81,27 @@ class Validator:
             errors.append(f"H2 섹션 부족: {h2_count}개 (최소 {self._min_sections}개)")
 
         original_keywords = _extract_keywords(original_text)
-        refined_normalized = _normalize(refined_text)
-        retained_kws = {kw for kw in original_keywords if kw in refined_normalized}
-        missing_kws = original_keywords - retained_kws
-        retained = len(retained_kws)
-        rate = retained / len(original_keywords) if original_keywords else 1.0
+        if original_keywords:
+            refined_normalized = _normalize(refined_text)
+            retained_kws = {kw for kw in original_keywords if kw in refined_normalized}
+            missing_kws = original_keywords - retained_kws
+            retained = len(retained_kws)
+            rate = retained / len(original_keywords)
 
-        if rate < self._threshold:
-            missing_keywords = sorted(missing_kws)
-            errors.append(
-                f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%}) "
-                f"| 누락: {missing_keywords}"
-            )
+            if rate < self._threshold:
+                missing_keywords = sorted(missing_kws)
+                errors.append(
+                    f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%}) "
+                    f"| 누락: {missing_keywords}"
+                )
+        else:
+            rate = 1.0
 
         orig_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(original_text)))
         pipeline_injected = _extract_pipeline_injected_numbers(refined_text)
         orig_nums.update(pipeline_injected)
 
-        refined_nums = set(_HALLUC_NUM_PATTERN.findall(refined_normalized))
+        refined_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(refined_text)))
         halluc_candidates = refined_nums - orig_nums
         if halluc_candidates:
             warnings.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {sorted(halluc_candidates)}")
