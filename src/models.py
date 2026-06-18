@@ -1,12 +1,14 @@
 # src/models.py
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 
 
 @dataclass
 class DocumentChunk:
+    source_file: str
     content: str
-    index: int
+    chunk_index: int
+    total_chunks: int
 
 
 @dataclass
