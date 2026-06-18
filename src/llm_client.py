@@ -24,13 +24,22 @@ class LLMClient:
         self._temperature = temperature
         self._top_p = top_p
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        prefix: str | None = None,
+    ) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        if prefix:
+            messages.append({"role": "assistant", "content": prefix})
+
         response = self._client.chat.completions.create(
             model=self._model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             max_tokens=self._max_tokens,
             temperature=self._temperature,
             top_p=self._top_p,
@@ -49,4 +58,10 @@ class LLMClient:
             raise LLMEmptyResponseError(
                 f"LLM 빈 응답 (finish_reason={finish_reason})"
             )
-        return content
+
+        if prefix:
+            full = prefix + content
+        else:
+            full = content
+
+        return full
