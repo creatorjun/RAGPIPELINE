@@ -23,11 +23,12 @@ class PipelineOrchestrator:
     def __init__(self, config: AppConfig):
         self._cfg = config
         self._llm = LLMClient(
-            model_path=config.model.path,
+            base_url=config.model.base_url,
+            api_key=config.model.api_key,
+            model_name=config.model.model_name,
             max_tokens=config.model.max_tokens,
             temperature=config.model.temperature,
             top_p=config.model.top_p,
-            repetition_penalty=config.model.repetition_penalty,
         )
         self._filter = DomainFilter(self._llm)
         self._refiner = Refiner(self._llm)
