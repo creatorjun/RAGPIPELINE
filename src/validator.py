@@ -9,13 +9,19 @@ _VER_PATTERN = re.compile(r"v?\d+\.\d+(?:\.\d+)?")
 _CODE_PATTERN = re.compile(r"`[^`]{2,30}`")
 _H2_PATTERN = re.compile(r"(?m)^## ")
 _HALLUC_NUM_PATTERN = re.compile(r"\b\d{4,}\b")
+_WEB_REF_PATTERN = re.compile(r"\[웹 참조[^\]]*\]")
+
+
+def _normalize(text: str) -> str:
+    return _WEB_REF_PATTERN.sub("", text)
 
 
 def _extract_keywords(text: str) -> set:
+    normalized = _normalize(text)
     keywords: set = set()
-    keywords.update(_NUM_PATTERN.findall(text))
-    keywords.update(_VER_PATTERN.findall(text))
-    keywords.update(m.group() for m in _CODE_PATTERN.finditer(text))
+    keywords.update(_NUM_PATTERN.findall(normalized))
+    keywords.update(_VER_PATTERN.findall(normalized))
+    keywords.update(m.group() for m in _CODE_PATTERN.finditer(normalized))
     return keywords
 
 
@@ -45,6 +51,7 @@ class Validator:
 
     def validate(self, original_text: str, refined_text: str) -> ValidationResult:
         errors: List[str] = []
+        warnings: List[str] = []
 
         if not _has_frontmatter(refined_text):
             errors.append("YAML front-matter 없음")
@@ -63,25 +70,24 @@ class Validator:
             errors.append(f"H2 섹션 부족: {h2_count}개 (최소 {self._min_sections}개)")
 
         original_keywords = _extract_keywords(original_text)
-        retained = 0
-        for kw in original_keywords:
-            if kw in refined_text:
-                retained += 1
+        refined_normalized = _normalize(refined_text)
+        retained = sum(1 for kw in original_keywords if kw in refined_normalized)
         rate = retained / len(original_keywords) if original_keywords else 1.0
 
         if rate < self._threshold:
             errors.append(f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%})")
 
-        orig_nums = set(_HALLUC_NUM_PATTERN.findall(original_text))
-        refined_nums = set(_HALLUC_NUM_PATTERN.findall(refined_text))
+        orig_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(original_text)))
+        refined_nums = set(_HALLUC_NUM_PATTERN.findall(refined_normalized))
         halluc_candidates = refined_nums - orig_nums
         if halluc_candidates:
-            errors.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {halluc_candidates}")
+            warnings.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {halluc_candidates}")
 
+        all_messages = errors + warnings
         return ValidationResult(
-            is_valid=not any("경고" not in e for e in errors if "경고" not in e and "키워드" not in e and "H2" not in e and "본문" not in e and "필수" not in e and "YAML" not in e) if errors else True,
+            is_valid=len(errors) == 0,
             keyword_retention_rate=rate,
-            errors=errors,
+            errors=all_messages,
         )
 
     def validate_strict(self, original_text: str, refined_text: str) -> ValidationResult:
