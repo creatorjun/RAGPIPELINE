@@ -34,6 +34,13 @@ class DomainConfig(BaseModel):
     keywords: List[str] = Field(default_factory=list)
 
 
+class SearchConfig(BaseModel):
+    enabled: bool = True
+    base_url: str = "http://localhost:8080"
+    timeout: int = 10
+    max_results: int = 5
+
+
 class RagConfig(BaseModel):
     embedding_model: str = "BAAI/bge-m3"
     qdrant_path: str = "./qdrant_db"
@@ -53,6 +60,7 @@ class AppConfig(BaseModel):
     pipeline: PipelineConfig
     domains: List[DomainConfig]
     glossary_path: str = "./glossary.yaml"
+    search: SearchConfig = Field(default_factory=SearchConfig)
     rag: RagConfig = Field(default_factory=RagConfig)
 
     @classmethod

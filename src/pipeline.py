@@ -16,7 +16,9 @@ from src.models import Document
 from src.progress import ProgressReporter
 from src.refiner import Refiner
 from src.resume import load_processed_files
+from src.search_augmenter import SearchAugmenter
 from src.validator import Validator
+from src.web_search import SearXNGClient
 
 
 class PipelineOrchestrator:
@@ -30,8 +32,18 @@ class PipelineOrchestrator:
             temperature=config.model.temperature,
             top_p=config.model.top_p,
         )
+        searxng = SearXNGClient(
+            base_url=config.search.base_url,
+            timeout=config.search.timeout,
+            max_results=config.search.max_results,
+        )
+        augmenter = SearchAugmenter(
+            llm=self._llm,
+            searxng=searxng,
+            enabled=config.search.enabled,
+        )
         self._filter = DomainFilter(self._llm)
-        self._refiner = Refiner(self._llm)
+        self._refiner = Refiner(self._llm, augmenter=augmenter)
         self._validator = Validator(
             keyword_retention_threshold=config.pipeline.keyword_retention_threshold,
             min_doc_length=config.pipeline.min_doc_length,
@@ -99,7 +111,7 @@ class PipelineOrchestrator:
                 return "skip"
 
             if filter_result.confidence < 0.7:
-                print(f"\n[WARN] {doc.source_file} — 분류 신뢰도 낙음: {filter_result.confidence:.2f}")
+                print(f"\n[WARN] {doc.source_file} \u2014 \ubd84\ub958 \uc2e0\ub8b0\ub3c4 \ub099\uc74c: {filter_result.confidence:.2f}")
 
             working_doc = doc
             if filter_result.is_partial:
@@ -165,20 +177,22 @@ class PipelineOrchestrator:
             log_entry["error"] = repr(exc)
             log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
             self._write_log(log_entry)
-            print(f"\n[ERROR] {doc.source_file} — {exc}")
+            print(f"\n[ERROR] {doc.source_file} \u2014 {exc}")
             return "fail"
 
     def run(self, resume: Optional[bool] = None, dry_run: bool = False) -> None:
         self._init_dirs()
         self._open_log()
-        print(f"[INFO] 로그 파일: {self._log_path}")
+        print(f"[INFO] \ub85c\uadf8 \ud30c\uc77c: {self._log_path}")
+        if self._cfg.search.enabled:
+            print(f"[INFO] \uc6f9 \uac80\uc0c9 \ubcf4\uac15 \ud65c\uc131\ud654 ({self._cfg.search.base_url})")
 
         all_docs = load_all_documents(
             self._cfg.pipeline.input_dir,
             self._cfg.pipeline.max_chunk_tokens,
             self._cfg.pipeline.overlap_tokens,
         )
-        print(f"[INFO] 입력 문서 {len(all_docs)}건 발견")
+        print(f"[INFO] \uc785\ub825 \ubb38\uc11c {len(all_docs)}\uac74 \ubc1c\uacac")
 
         use_resume = resume if resume is not None else self._cfg.pipeline.resume
         docs_to_process = all_docs
@@ -188,19 +202,19 @@ class PipelineOrchestrator:
             skipped_names = {d.source_file for d in all_docs} & processed
             docs_to_process = [d for d in all_docs if d.source_file not in processed]
             if skipped_names:
-                print(f"[RESUME] 이미 완료된 문서 {len(skipped_names)}건 스킵")
+                print(f"[RESUME] \uc774\ubbf8 \uc644\ub8cc\ub41c \ubb38\uc11c {len(skipped_names)}\uac74 \uc2a4\ud0b5")
 
         if dry_run:
-            print(f"[DRY-RUN] 실제 실행 없이 종료 — 처리 대상 {len(docs_to_process)}건")
+            print(f"[DRY-RUN] \uc2e4\uc81c \uc2e4\ud589 \uc5c6\uc774 \uc885\ub8cc \u2014 \ucc98\ub9ac \ub300\uc0c1 {len(docs_to_process)}\uac74")
             for doc in docs_to_process:
-                print(f"  • {doc.source_file}")
+                print(f"  \u2022 {doc.source_file}")
             return
 
         if not docs_to_process:
-            print("[INFO] 처리할 문서가 없습니다.")
+            print("[INFO] \ucc98\ub9ac\ud560 \ubb38\uc11c\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.")
             return
 
-        print(f"[INFO] 처리 대상: {len(docs_to_process)}건")
+        print(f"[INFO] \ucc98\ub9ac \ub300\uc0c1: {len(docs_to_process)}\uac74")
         concurrency = max(1, self._cfg.pipeline.concurrency)
         reporter = ProgressReporter(len(docs_to_process))
 
@@ -220,10 +234,10 @@ class PipelineOrchestrator:
 
     def _print_domain_summary(self) -> None:
         output_base = Path(self._cfg.pipeline.output_dir)
-        print("\n  도메인별 출력 문서 수")
+        print("\n  \ub3c4\uba54\uc778\ubcc4 \ucd9c\ub825 \ubb38\uc11c \uc218")
         print("  " + "-" * 30)
         for domain in self._cfg.domains:
             folder = output_base / domain.output_folder
             count = len(list(folder.glob("*.md"))) if folder.exists() else 0
-            print(f"  {domain.name:<15}: {count}건")
+            print(f"  {domain.name:<15}: {count}\uac74")
         print()

@@ -1,6 +1,6 @@
 # src/refiner.py
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 from src.llm_client import LLMClient
 from src.models import Document, DocumentChunk
@@ -58,8 +58,9 @@ _REFINE_USER_TEMPLATE = """다음 원본 문서를 RAG 최적화 Markdown으로 
 
 
 class Refiner:
-    def __init__(self, llm: LLMClient):
+    def __init__(self, llm: LLMClient, augmenter=None):
         self._llm = llm
+        self._augmenter = augmenter
 
     def extract_domain_sections(self, doc: Document, domains: List[str]) -> str:
         domains_str = ", ".join(d.upper() for d in domains)
@@ -93,29 +94,31 @@ class Refiner:
             return ""
 
         if len(refined_chunks) == 1:
-            return refined_chunks[0]
-
-        head = refined_chunks[0]
-        body_parts: List[str] = []
-        for subsequent in refined_chunks[1:]:
-            lines = subsequent.splitlines()
-            in_frontmatter = False
-            skip = False
-            cleaned: List[str] = []
-            fence_count = 0
-            for line in lines:
-                if line.strip() == "---":
-                    fence_count += 1
-                    if fence_count <= 2:
-                        skip = True
+            merged = refined_chunks[0]
+        else:
+            head = refined_chunks[0]
+            body_parts: List[str] = []
+            for subsequent in refined_chunks[1:]:
+                lines = subsequent.splitlines()
+                skip = False
+                cleaned: List[str] = []
+                fence_count = 0
+                for line in lines:
+                    if line.strip() == "---":
+                        fence_count += 1
+                        if fence_count <= 2:
+                            skip = True
+                            continue
+                        else:
+                            skip = False
+                            continue
+                    if skip:
                         continue
-                    else:
-                        skip = False
-                        continue
-                if skip:
-                    continue
-                cleaned.append(line)
-            body_parts.append("\n".join(cleaned))
+                    cleaned.append(line)
+                body_parts.append("\n".join(cleaned))
+            merged = head + "\n\n" + "\n\n".join(body_parts)
 
-        merged = head + "\n\n" + "\n\n".join(body_parts)
+        if self._augmenter is not None:
+            merged = self._augmenter.augment(merged, doc.source_file)
+
         return merged

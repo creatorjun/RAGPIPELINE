@@ -19,6 +19,12 @@ pipeline:
   resume: true
   concurrency: 1
 
+search:
+  enabled: true
+  base_url: "http://localhost:8080"
+  timeout: 10
+  max_results: 5
+
 domains:
   - name: build
     output_folder: build
