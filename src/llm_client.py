@@ -59,9 +59,12 @@ class LLMClient:
                 f"LLM 빈 응답 (finish_reason={finish_reason})"
             )
 
-        if prefix:
-            full = prefix + content
-        else:
-            full = content
+        return (prefix + content) if prefix else content
 
-        return full
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def max_tokens(self) -> int:
+        return self._max_tokens
