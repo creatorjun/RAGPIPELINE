@@ -1,0 +1,51 @@
+model:
+  path: ./models/gemma-4-26b-moe
+  max_tokens: 4096
+  temperature: 0.1
+  top_p: 0.9
+  repetition_penalty: 1.1
+
+pipeline:
+  input_dir: ./as_is
+  output_dir: ./to_be
+  log_dir: ./logs
+  max_chunk_tokens: 8000
+  overlap_tokens: 200
+  max_retries: 2
+  keyword_retention_threshold: 0.7
+  min_sections: 1
+  min_doc_length: 200
+
+domains:
+  - name: build
+    output_folder: build
+    keywords:
+      - 구축
+      - 설치
+      - 배포
+      - 설계
+      - 환경
+      - 인프라
+      - 구성
+  - name: maintenance
+    output_folder: maintenance
+    keywords:
+      - 운영
+      - 유지보수
+      - 모니터링
+      - 백업
+      - 튜닝
+      - 점검
+      - 최적화
+  - name: incident
+    output_folder: incident
+    keywords:
+      - 장애
+      - 에러
+      - 복구
+      - 롤백
+      - RCA
+      - 인시던트
+      - 대응
+
+glossary_path: ./glossary.yaml

@@ -1,0 +1,4 @@
+mlx-lm>=0.21.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+PyYAML>=6.0.1

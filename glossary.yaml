@@ -1,0 +1,8 @@
+terms:
+  RCA: "Root Cause Analysis (근본 원인 분석)"
+  SRE: "Site Reliability Engineering"
+  MTTR: "Mean Time To Recovery (평균 복구 시간)"
+  PROD: "운영 환경 (Production Environment)"
+  DR: "Disaster Recovery (재해 복구)"
+  IaC: "Infrastructure as Code (코드형 인프라)"
+  CI/CD: "Continuous Integration / Continuous Deployment"
