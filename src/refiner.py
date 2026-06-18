@@ -6,62 +6,62 @@ import re
 from src.llm_client import LLMClient
 from src.models import Document, DocumentChunk
 
-_EXTRACT_SYSTEM = """당신은 기술 문서 편집자입니다. 지시에 따라 관련 섹션만 추출하세요."""
+_EXTRACT_SYSTEM = """You are a technical document editor. Extract only the relevant sections as instructed."""
 
-_EXTRACT_USER_TEMPLATE = """아래 문서에서 [{domains}] 도메인에 관련된 섹션만 추출하세요.
+_EXTRACT_USER_TEMPLATE = """From the document below, extract ONLY the sections related to the [{domains}] domain(s).
 
-[추출 규칙]
-1. 관련 섹션의 헤더(H1~H3)와 내용을 원문 그대로 추출
-2. 관련 없는 섹션은 제거
-3. 추출된 섹션이 없으면 "NONE"만 출력
-4. 마크다운 형식 유지
-5. 코드펜스(```markdown, ```yaml 등)로 감싸지 말고 순수 마크다운으로 출력
+Rules:
+1. Extract the header (H1~H3) and content of relevant sections verbatim.
+2. Remove sections that are not related.
+3. If no relevant sections exist, output only the word: NONE
+4. Preserve Markdown formatting.
+5. Output pure Markdown — do NOT wrap the output in code fences (```markdown, ```yaml, etc.).
 
-[원본 문서]
+[Document]
 {content}"""
 
-_REFINE_SYSTEM = """당신은 사내 기술 문서를 RAG 검색 시스템에 최적화된 Markdown으로 변환하는 전문 기술 편집자입니다.
+_REFINE_SYSTEM = """You are an expert technical editor who converts internal technical documents into Markdown optimized for RAG (Retrieval-Augmented Generation) search systems.
 
-[출력 형식 규칙]
-1. 반드시 "---" 로 시작하는 YAML front-matter를 첫 번째 블록으로 출력
-2. 코드펜스(```markdown, ```yaml 등)로 전체 출력을 감싸지 마세요
-3. 순수 Markdown 텍스트로만 출력
+Output format rules:
+1. The very first block MUST be a YAML front-matter block that starts with "---" and ends with "---".
+2. Do NOT wrap the entire output in code fences (```markdown, ```yaml, etc.).
+3. Output ONLY pure Markdown text.
 
-[절대 금지 사항]
-1. 원문에 없는 내용, 수치, 날짜, 버전 정보를 절대 추가하지 마세요
-2. 원문의 코드 블록, 명령어, 수식을 변경하지 마세요
-3. 원문의 사실 관계를 변경하거나 누락시키지 마세요
-4. 웹 검색 참조([웹 참조 ...]) 태그에 포함된 날짜·숫자를 본문에 삽입하지 마세요
-5. [웹 참조 ...] 태그는 출처 표기 전용입니다. 해당 태그의 날짜·숫자를 본문에 사용하지 마세요
+Absolute prohibitions:
+1. Do NOT add any content, numbers, dates, or version info that does not exist in the source document.
+2. Do NOT modify code blocks, commands, or formulas from the source.
+3. Do NOT change or omit factual relationships from the source.
+4. Do NOT insert dates or numbers found inside [web ref ...] tags into the body text.
+5. [web ref ...] tags are for citation only — never use their dates or numbers in the body.
 
-[사내 용어집]
-- RCA: Root Cause Analysis (근본 원인 분석)
+Internal glossary:
+- RCA: Root Cause Analysis
 - SRE: Site Reliability Engineering
-- MTTR: Mean Time To Recovery (평균 복구 시간)
-- PROD: 운영 환경 (Production Environment)"""
+- MTTR: Mean Time To Recovery
+- PROD: Production Environment"""
 
-_REFINE_USER_TEMPLATE = """다음 원본 문서를 RAG 최적화 Markdown으로 변환하세요.
+_REFINE_USER_TEMPLATE = """Convert the source document below into a RAG-optimized Markdown document.
 
-[YAML front-matter 작성 규칙]
-- title: 명확한 제목 (문자열)
+YAML front-matter fields (ALL required):
+- title: clear descriptive title (string)
 - domain: {domains_yaml}
-- doc_type: runbook|architecture|troubleshooting|policy|procedure|reference 중 택1
-- keywords: 아래 원본 키워드를 반드시 모두 포함한 뒤 추가 가능 → {required_keywords}
-- summary: 2문장 이내 (문자열)
+- doc_type: one of runbook | architecture | troubleshooting | policy | procedure | reference
+- keywords: MUST include all of the following original keywords, then add more as needed: {required_keywords}
+- summary: 1-2 sentence summary (string)
 - source_file: {source_file}
 - refined_at: {today}
 
-[구조 변환 규칙]
-1. H1은 1개만 사용
-2. H2는 독립 주제로 재구성
-3. 참조 표현 제거
-4. 수동태를 능동태로 변환
-5. 암묵지를 명시적 문장으로 변환
-6. 중복 제거
-7. 약어 최초 등장 시 풀네임 병기
-8. [웹 참조 ...] 태그는 본문에서 제거하되, 해당 태그에서 파생된 날짜·숫자를 본문에 추가하지 말 것
+Structure conversion rules:
+1. Use exactly one H1 heading.
+2. Reorganize content under independent H2 sections.
+3. Remove citation/reference expressions.
+4. Convert passive voice to active voice.
+5. Make implicit knowledge explicit.
+6. Remove duplicates.
+7. Write out acronyms in full on first use.
+8. Remove [web ref ...] tags from the body; do NOT add their dates or numbers to the body.
 
-[원본 문서]
+[Source Document]
 {content}"""
 
 _REFINE_PREFIX = "---\n"
@@ -149,7 +149,7 @@ class Refiner:
     ) -> str:
         today = date.today().isoformat()
         domains_yaml = "[\n" + "".join(f"    - {d}\n" for d in domains) + "  ]"
-        kw_hint = ", ".join(required_keywords) if required_keywords else "원본 문서에서 추출"
+        kw_hint = ", ".join(required_keywords) if required_keywords else "extract from source"
         user_prompt = _REFINE_USER_TEMPLATE.format(
             domains_yaml=domains_yaml,
             source_file=source_file,
