@@ -35,8 +35,16 @@ class LLMClient:
             temperature=self._temperature,
             top_p=self._top_p,
         )
-        finish_reason = response.choices[0].finish_reason
-        content = (response.choices[0].message.content or "").strip()
+        choice = response.choices[0]
+        finish_reason = choice.finish_reason
+        message = choice.message
+
+        content = (message.content or "").strip()
+
+        if not content:
+            reasoning = getattr(message, "reasoning_content", None) or ""
+            content = reasoning.strip()
+
         if not content:
             raise LLMEmptyResponseError(
                 f"LLM 빈 응답 (finish_reason={finish_reason})"
