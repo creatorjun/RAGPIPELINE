@@ -1,6 +1,6 @@
 # src/validator.py
 import re
-from typing import List
+from typing import List, Set
 
 from src.models import ValidationResult
 
@@ -17,21 +17,20 @@ def _normalize(text: str) -> str:
     return _WEB_REF_PATTERN.sub("", text)
 
 
-def _extract_pipeline_injected_numbers(refined_text: str) -> set:
-    injected: set = set()
+def _extract_pipeline_injected_numbers(refined_text: str) -> Set[str]:
+    injected: Set[str] = set()
     m = _REFINED_AT_PATTERN.search(refined_text)
     if m:
         date_str = m.group(1).strip()
-        parts = re.split(r'[-/]', date_str)
-        for p in parts:
+        for p in re.split(r'[-/]', date_str):
             if re.fullmatch(r'\d{4,}', p):
                 injected.add(p)
     return injected
 
 
-def _extract_keywords(text: str) -> set:
+def _extract_keywords(text: str) -> Set[str]:
     normalized = _normalize(text)
-    keywords: set = set()
+    keywords: Set[str] = set()
     keywords.update(_NUM_PATTERN.findall(normalized))
     keywords.update(_VER_PATTERN.findall(normalized))
     keywords.update(m.group() for m in _CODE_PATTERN.finditer(normalized))
@@ -65,6 +64,7 @@ class Validator:
     def validate(self, original_text: str, refined_text: str) -> ValidationResult:
         errors: List[str] = []
         warnings: List[str] = []
+        missing_keywords: List[str] = []
 
         if not _has_frontmatter(refined_text):
             errors.append("YAML front-matter 없음")
@@ -84,11 +84,17 @@ class Validator:
 
         original_keywords = _extract_keywords(original_text)
         refined_normalized = _normalize(refined_text)
-        retained = sum(1 for kw in original_keywords if kw in refined_normalized)
+        retained_kws = {kw for kw in original_keywords if kw in refined_normalized}
+        missing_kws = original_keywords - retained_kws
+        retained = len(retained_kws)
         rate = retained / len(original_keywords) if original_keywords else 1.0
 
         if rate < self._threshold:
-            errors.append(f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%})")
+            missing_keywords = sorted(missing_kws)
+            errors.append(
+                f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%}) "
+                f"| 누락: {missing_keywords}"
+            )
 
         orig_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(original_text)))
         pipeline_injected = _extract_pipeline_injected_numbers(refined_text)
@@ -97,13 +103,13 @@ class Validator:
         refined_nums = set(_HALLUC_NUM_PATTERN.findall(refined_normalized))
         halluc_candidates = refined_nums - orig_nums
         if halluc_candidates:
-            warnings.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {halluc_candidates}")
+            warnings.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {sorted(halluc_candidates)}")
 
-        all_messages = errors + warnings
         return ValidationResult(
             is_valid=len(errors) == 0,
             keyword_retention_rate=rate,
-            errors=all_messages,
+            errors=errors + warnings,
+            missing_keywords=missing_keywords,
         )
 
     def validate_strict(self, original_text: str, refined_text: str) -> ValidationResult:
@@ -113,4 +119,5 @@ class Validator:
             is_valid=len(blocking) == 0,
             keyword_retention_rate=result.keyword_retention_rate,
             errors=result.errors,
+            missing_keywords=result.missing_keywords,
         )
