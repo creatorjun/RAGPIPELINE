@@ -1,9 +1,10 @@
 model:
-  path: ./models/gemma-4-26b-moe
+  base_url: "http://0.0.0.0:8000/v1"
+  api_key: "sk-no-key-required"
+  model_name: "mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit"
   max_tokens: 4096
   temperature: 0.1
   top_p: 0.9
-  repetition_penalty: 1.1
 
 pipeline:
   input_dir: ./as_is

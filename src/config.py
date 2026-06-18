@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class ModelConfig(BaseModel):
-    path: str
+    base_url: str = "http://0.0.0.0:8000/v1"
+    api_key: str = "sk-no-key-required"
+    model_name: str = "mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit"
     max_tokens: int = 4096
     temperature: float = 0.1
     top_p: float = 0.9
-    repetition_penalty: float = 1.1
 
 
 class PipelineConfig(BaseModel):
