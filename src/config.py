@@ -19,7 +19,7 @@ class ServerConfig(BaseModel):
     model_path: Optional[str] = None
     host: str = "0.0.0.0"
     port: int = 8000
-    backend: Literal["mlx_lm", "mlx_vllm", "vllm_mlx", "vllm"] = "vllm_mlx"
+    backend: Literal["mlx_lm", "mlx_vllm", "vllm_mlx", "vllm", "vllm_metal"] = "vllm_metal"
     trust_remote_code: bool = False
     extra_args: List[str] = Field(default_factory=list)
     startup_timeout: int = 300

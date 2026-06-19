@@ -25,19 +25,19 @@ def _is_port_bound(host: str, port: int) -> bool:
             return False
 
 
-def _find_vllm_mlx() -> str:
+def _find_executable(name: str) -> str:
     venv_bin = pathlib.Path(sys.executable).parent
-    candidate = venv_bin / "vllm-mlx"
+    candidate = venv_bin / name
     if candidate.exists():
         return str(candidate)
     import shutil
-    found = shutil.which("vllm-mlx")
+    found = shutil.which(name)
     if found:
         return found
     raise FileNotFoundError(
-        "vllm-mlx 실행파일을 찾을 수 없습니다.\n"
+        f"{name} 실행파일을 찾을 수 없습니다.\n"
         f"  시도한 경로: {candidate}\n"
-        "  설치 확인: pip install vllm-mlx"
+        f"  설치 확인: pip install {name.replace('-', '_')}"
     )
 
 
@@ -51,7 +51,7 @@ class ModelServer:
         model_path: str,
         host: str = "0.0.0.0",
         port: int = 8000,
-        backend: str = "vllm_mlx",
+        backend: str = "vllm_metal",
         max_tokens: int = 4096,
         trust_remote_code: bool = False,
         extra_args: Optional[list[str]] = None,
@@ -189,7 +189,9 @@ class ModelServer:
         return f"http://{host}:{self._port}/v1"
 
     def _build_command(self) -> list[str]:
-        if self._backend == "vllm_mlx":
+        if self._backend == "vllm_metal":
+            return self._build_vllm_metal_cmd()
+        elif self._backend == "vllm_mlx":
             return self._build_vllm_mlx_cmd()
         elif self._backend == "mlx_vllm":
             return self._build_mlx_vlm_cmd(sys.executable)
@@ -198,8 +200,27 @@ class ModelServer:
         else:
             return self._build_mlx_lm_cmd(sys.executable)
 
+    def _build_vllm_metal_cmd(self) -> list[str]:
+        executable = _find_executable("vllm")
+        cmd = [
+            executable, "serve",
+            self._model_path,
+            "--host", self._host,
+            "--port", str(self._port),
+            "--api-key", self._api_key,
+            "--dtype", self._dtype,
+        ]
+        if self._max_model_len is not None:
+            cmd += ["--max-model-len", str(self._max_model_len)]
+        if self._trust_remote_code:
+            cmd.append("--trust-remote-code")
+        if self._reasoning_parser:
+            cmd += ["--reasoning-parser", self._reasoning_parser]
+        cmd.extend(self._extra_args)
+        return cmd
+
     def _build_vllm_mlx_cmd(self) -> list[str]:
-        executable = _find_vllm_mlx()
+        executable = _find_executable("vllm-mlx")
         cmd = [
             executable, "serve",
             self._model_path,
