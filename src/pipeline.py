@@ -1,42 +1,42 @@
 # src/pipeline.py
-import json
-import os
-import tempfile
+"""
+오토케스튤레이션 (일괄 실행 럨너).
+
+SRP 역할: 처리 대상 문서 목록을 결정하고, concurrency 맨니저로
+         DocumentRunner 에 위임한다.
+"""
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from pathlib import Path
-from threading import Lock
-from typing import List, Optional, Set
+from typing import Optional, Set
 
 from src.config import AppConfig
 from src.domain_filter import DomainFilter
 from src.judge import JudgeLLM
-from src.llm_client import LLMClient, LLMEmptyResponseError
-from src.loader import load_all_documents, load_document
-from src.models import Document, JudgeVerdict
+from src.llm_client import LLMClient
+from src.loader import load_all_documents
+from src.pipeline_io import PipelineIO
+from src.pipeline_runner import DocumentRunner
 from src.progress import ProgressReporter
 from src.refiner import Refiner
 from src.resume import load_processed_files
 from src.search_augmenter import SearchAugmenter
-from src.validator import StructureValidator, strip_thinking
+from src.validator import StructureValidator
 from src.web_search import SearXNGClient
-
-try:
-    import tiktoken
-    _ENC = tiktoken.get_encoding("cl100k_base")
-
-    def _token_count(text: str) -> int:
-        return len(_ENC.encode(text))
-except ImportError:
-    def _token_count(text: str) -> int:
-        korean = sum(1 for c in text if '\uac00' <= c <= '\ud7a3')
-        return korean + (len(text) - korean) // 4
 
 
 class PipelineOrchestrator:
+    """오토케스트레이션.
+
+    의존성 연결 + 실행 제어만 담당하고
+    세부 로직은 DocumentRunner / PipelineIO 에 위임한다.
+    """
+
     def __init__(self, config: AppConfig):
         self._cfg = config
-        self._llm = LLMClient(
+
+        # --- infrastructure ----------------------------------------
+        llm = LLMClient(
             base_url=config.model.base_url,
             api_key=config.model.api_key,
             model_name=config.model.model_name,
@@ -50,227 +50,55 @@ class PipelineOrchestrator:
             max_results=config.search.max_results,
         )
         augmenter = SearchAugmenter(
-            llm=self._llm,
+            llm=llm,
             searxng=searxng,
             enabled=config.search.enabled,
         )
-        self._filter = DomainFilter(
-            llm=self._llm,
+
+        # --- domain services ---------------------------------------
+        domain_filter = DomainFilter(
+            llm=llm,
             valid_domains=config.get_domain_names(),
         )
-        self._refiner = Refiner(self._llm, augmenter=augmenter)
-        self._structure_validator = StructureValidator(
+        refiner = Refiner(llm, augmenter=augmenter)
+        structure_validator = StructureValidator(
             min_doc_length=config.pipeline.min_doc_length,
             min_sections=config.pipeline.min_sections,
         )
-        self._judge: Optional[JudgeLLM] = (
-            JudgeLLM(self._llm, max_tokens=config.judge.max_tokens)
+        judge: Optional[JudgeLLM] = (
+            JudgeLLM(llm, max_tokens=config.judge.max_tokens)
             if config.judge.enabled
             else None
         )
-        self._log_path: Optional[Path] = None
-        self._log_lock = Lock()
 
-    def _init_dirs(self) -> None:
-        for domain in self._cfg.domains:
-            Path(self._cfg.pipeline.output_dir, domain.output_folder).mkdir(parents=True, exist_ok=True)
-        Path(self._cfg.pipeline.log_dir).mkdir(parents=True, exist_ok=True)
-        Path(self._cfg.pipeline.input_dir).mkdir(parents=True, exist_ok=True)
+        # --- I/O + runner ------------------------------------------
+        self._io = PipelineIO(config)
+        self._runner = DocumentRunner(
+            cfg=config,
+            io=self._io,
+            domain_filter=domain_filter,
+            refiner=refiner,
+            structure_validator=structure_validator,
+            judge=judge,
+            on_judge_error=config.judge.on_error,
+        )
 
-    def _open_log(self) -> None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._log_path = Path(self._cfg.pipeline.log_dir) / f"pipeline_run_{ts}.jsonl"
-
-    def _write_log(self, entry: dict) -> None:
-        if self._log_path is None:
-            return
-        with self._log_lock:
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-    def _save_output(self, refined_text: str, source_file: str, domains: List[str]) -> List[str]:
-        saved: List[str] = []
-        for domain in domains:
-            folder = self._cfg.get_output_folder(domain)
-            if folder is None:
-                continue
-            out_dir = Path(self._cfg.pipeline.output_dir) / folder
-            stem = Path(source_file).stem + ".md"
-            out_path = out_dir / stem
-            out_path.write_text(refined_text, encoding="utf-8")
-            saved.append(str(out_path))
-        return saved
-
-    def _process_document(self, doc: Document) -> str:
-        start = datetime.now(tz=timezone.utc)
-        log_entry: dict = {
-            "timestamp": start.isoformat(),
-            "source_file": doc.source_file,
-            "stage": "start",
-            "status": "processing",
-            "domain": [],
-            "output_files": [],
-            "retry_count": 0,
-            "tokens_in": _token_count(doc.content),
-            "tokens_out": 0,
-            "duration_sec": 0.0,
-            "error": None,
-            "judge": None,
-        }
-        self._write_log(log_entry)
-
-        try:
-            filter_result = self._filter.classify(doc)
-            log_entry["stage"] = "domain_filter"
-            log_entry["domain"] = filter_result.domains
-
-            if not filter_result.domains:
-                log_entry["status"] = "skip"
-                log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-                self._write_log(log_entry)
-                return "skip"
-
-            if filter_result.confidence < 0.7:
-                print(f"\n[WARN] {doc.source_file} \u2014 분류 신뢰도 낙음: {filter_result.confidence:.2f}")
-
-            working_doc = doc
-            if filter_result.is_partial:
-                log_entry["stage"] = "extract"
-                extracted = self._refiner.extract_domain_sections(doc, filter_result.domains)
-                if not extracted:
-                    print(f"\n[WARN] {doc.source_file} \u2014 섹션 추출 결과 없음, 원본으로 폴백")
-                else:
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", suffix=".md", delete=False, encoding="utf-8"
-                    ) as tmp:
-                        tmp.write(extracted)
-                        tmp_path = tmp.name
-                    try:
-                        working_doc = load_document(
-                            Path(tmp_path),
-                            self._cfg.pipeline.max_chunk_tokens,
-                            self._cfg.pipeline.overlap_tokens,
-                        )
-                        working_doc.source_file = doc.source_file
-                    finally:
-                        os.unlink(tmp_path)
-
-            refined_text = ""
-            last_verdict: Optional[JudgeVerdict] = None
-            max_retries = self._cfg.pipeline.max_retries
-
-            for attempt in range(max_retries + 1):
-                log_entry["stage"] = "refine"
-
-                retry_hint: Optional[str] = (
-                    last_verdict.retry_hint
-                    if last_verdict and last_verdict.retry_hint != "none"
-                    else None
-                )
-
-                try:
-                    refined_text = self._refiner.refine_document(
-                        working_doc,
-                        filter_result.domains,
-                        retry_hint=retry_hint,
-                    )
-                except LLMEmptyResponseError as e:
-                    print(f"\n[ERROR] {doc.source_file} \u2014 LLM 빈 응답: {e}")
-                    if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file}")
-                        continue
-                    log_entry["status"] = "fail"
-                    log_entry["error"] = str(e)
-                    log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-                    self._write_log(log_entry)
-                    return "fail"
-
-                if not refined_text.strip():
-                    if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 refine 결과 빈 문자열")
-                        continue
-                    log_entry["status"] = "fail"
-                    log_entry["error"] = "refine 결과 빈 문자열"
-                    log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-                    self._write_log(log_entry)
-                    return "fail"
-
-                clean_text = strip_thinking(refined_text)
-
-                log_entry["stage"] = "structure_validate"
-                struct_result = self._structure_validator.validate(clean_text)
-                if not struct_result.is_valid:
-                    if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 구조 오류: {struct_result.errors}")
-                        continue
-                    log_entry["status"] = "fail"
-                    log_entry["error"] = str(struct_result.errors)
-                    log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-                    self._write_log(log_entry)
-                    return "fail"
-
-                if self._judge is not None:
-                    log_entry["stage"] = "judge"
-                    verdict = self._judge.judge(
-                        original_text=doc.content,
-                        refined_text=clean_text,
-                        source_file=doc.source_file,
-                    )
-                    last_verdict = verdict
-                    log_entry["judge"] = {
-                        "passed": verdict.passed,
-                        "faithfulness": verdict.faithfulness,
-                        "completeness": verdict.completeness,
-                        "structure_ok": verdict.structure_ok,
-                        "critique": verdict.critique,
-                        "retry_hint": verdict.retry_hint,
-                        "attempt": attempt,
-                    }
-                    self._write_log(log_entry)
-
-                    if not verdict.passed:
-                        if attempt < max_retries:
-                            print(
-                                f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file}\n"
-                                f"  Judge critique: {verdict.critique}\n"
-                                f"  Retry hint: {verdict.retry_hint}"
-                            )
-                            continue
-                        log_entry["status"] = "fail"
-                        log_entry["error"] = f"Judge 불합격: {verdict.critique}"
-                        log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-                        self._write_log(log_entry)
-                        return "fail"
-
-                log_entry["retry_count"] = attempt
-                refined_text = clean_text
-                break
-
-            log_entry["tokens_out"] = _token_count(refined_text) if refined_text else 0
-            saved = self._save_output(refined_text, doc.source_file, filter_result.domains)
-            log_entry["output_files"] = saved
-            log_entry["status"] = "success"
-            log_entry["stage"] = "done"
-            log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-            self._write_log(log_entry)
-            return "success"
-
-        except Exception as exc:
-            log_entry["status"] = "fail"
-            log_entry["error"] = repr(exc)
-            log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-            self._write_log(log_entry)
-            print(f"\n[ERROR] {doc.source_file} \u2014 {exc}")
-            return "fail"
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def run(self, resume: Optional[bool] = None, dry_run: bool = False) -> None:
-        self._init_dirs()
-        self._open_log()
-        print(f"[INFO] 로그 파일: {self._log_path}")
+        self._io.init_dirs()
+        log_path = self._io.open_log()
+        print(f"[INFO] 로그 파일: {log_path}")
         if self._cfg.search.enabled:
             print(f"[INFO] 웹 검색 보강 활성화 ({self._cfg.search.base_url})")
         if self._cfg.judge.enabled:
-            print(f"[INFO] Judge LLM 활성화 (model={self._cfg.model.model_name}, temperature=0.0)")
+            print(
+                f"[INFO] Judge LLM 활성화 "
+                f"(model={self._cfg.model.model_name}, "
+                f"on_error={self._cfg.judge.on_error})"
+            )
 
         all_docs = load_all_documents(
             self._cfg.pipeline.input_dir,
@@ -297,16 +125,16 @@ class PipelineOrchestrator:
 
         concurrency = max(1, self._cfg.pipeline.concurrency)
         reporter = ProgressReporter(total=len(docs_to_process))
-        counts = {"success": 0, "fail": 0, "skip": 0}
+        counts: dict[str, int] = {"success": 0, "fail": 0, "skip": 0}
 
         if concurrency == 1:
             for doc in docs_to_process:
-                result = self._process_document(doc)
+                result = self._runner.run(doc)
                 counts[result] = counts.get(result, 0) + 1
                 reporter.update(result)
         else:
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
-                futures = {pool.submit(self._process_document, doc): doc for doc in docs_to_process}
+                futures = {pool.submit(self._runner.run, doc): doc for doc in docs_to_process}
                 for future in as_completed(futures):
                     result = future.result()
                     counts[result] = counts.get(result, 0) + 1
@@ -314,4 +142,4 @@ class PipelineOrchestrator:
 
         reporter.close()
         print(f"\n[DONE] 성공={counts['success']} / 실패={counts['fail']} / 스킵={counts['skip']}")
-        print(f"[INFO] 로그: {self._log_path}")
+        print(f"[INFO] 로그: {log_path}")
