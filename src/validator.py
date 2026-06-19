@@ -2,12 +2,11 @@
 import re
 from typing import List
 
+from src.llm_utils import strip_llm_noise
 from src.models import ValidationResult
 
-_THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
-_GENERIC_TAG_PATTERN = re.compile(r"<\|[^>]+>", re.DOTALL)
 _H2_PATTERN = re.compile(r"(?m)^## ")
-_FRONTMATTER_OPEN = re.compile(r"^---\s*\n", re.MULTILINE)
+_FRONTMATTER_CLOSE_PATTERN = re.compile(r"(?m)^---\s*$")
 _REQUIRED_FIELDS = [
     "title:", "domain:", "doc_type:",
     "keywords:", "summary:", "source_file:", "refined_at:",
@@ -15,23 +14,32 @@ _REQUIRED_FIELDS = [
 
 
 def strip_thinking(text: str) -> str:
-    cleaned = _THINK_TAG_PATTERN.sub("", text)
-    cleaned = _GENERIC_TAG_PATTERN.sub("", cleaned)
-    lines = cleaned.splitlines()
-    result: List[str] = []
-    found = False
-    for line in lines:
-        if not found and line.strip() in ("", "thought", "model", "user"):
-            continue
-        found = True
-        result.append(line)
-    return "\n".join(result).strip()
+    """하위 호환성 유지를 위한 alias — 내부는 llm_utils.strip_llm_noise 를 사용한다."""
+    return strip_llm_noise(text)
+
+
+def _extract_body(text: str) -> str:
+    """YAML front-matter 를 제거하고 본문만 반환한다.
+
+    BUG FIX: text.find('---', 3) 은 front-matter 내부의 '---' 값과 충돌할 수 있다.
+    대신 줄 단위로 두 번째 독립적인 '---' 행을 찾는다.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return stripped
+
+    # 첫 번째 '---' 이후부터 다음 '---' 단독 행 검색
+    after_open = stripped[3:]  # '---' 바로 뒤 문자열
+    m = _FRONTMATTER_CLOSE_PATTERN.search(after_open)
+    if m is None:
+        return stripped
+    return after_open[m.end():]
 
 
 class StructureValidator:
     """
     YAML front-matter 구조와 필수 필드 존재 여부만 검사한다.
-    내용(content) 품질 판단은 JudgeLLM이 전담한다.
+    내용(content) 품질 판단은 JudgeLLM 이 전담한다.
     """
 
     def __init__(self, min_doc_length: int = 200, min_sections: int = 1):
@@ -49,8 +57,7 @@ class StructureValidator:
         if missing:
             errors.append(f"필수 필드 누락: {missing}")
 
-        body_start = text.find("---", 3)
-        body = text[body_start + 3:] if body_start != -1 else text
+        body = _extract_body(text)
         if len(body.strip()) < self._min_length:
             errors.append(f"본문 길이 부족: {len(body.strip())}자 (최소 {self._min_length}자)")
 

@@ -23,6 +23,9 @@ class LLMClient(LLMClientPort):
         self._base_url = base_url
         self._api_key = api_key
         self._client = OpenAI(base_url=base_url, api_key=api_key)
+        # BUG FIX: generate_isolated 용 격리 클라이언트를 재사용한다.
+        # 기존 코드는 호출마다 새 OpenAI() 인스턴스를 생성해 불필요한 오버헤드가 있었다.
+        self._isolated_client = OpenAI(base_url=base_url, api_key=api_key)
         self._model_name = model_name
         self._max_tokens = max_tokens
         self._temperature = temperature
@@ -88,7 +91,6 @@ class LLMClient(LLMClientPort):
         temperature: float = 0.0,
         max_tokens: int | None = None,
     ) -> str:
-        isolated_client = OpenAI(base_url=self._base_url, api_key=self._api_key)
         return self._call(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -96,7 +98,7 @@ class LLMClient(LLMClientPort):
             temperature=temperature,
             top_p=self._top_p,
             max_tokens=max_tokens if max_tokens is not None else self._max_tokens,
-            client=isolated_client,
+            client=self._isolated_client,
         )
 
     @property

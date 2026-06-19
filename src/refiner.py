@@ -3,6 +3,7 @@ from datetime import date
 from typing import List, Optional
 import re
 
+from src.llm_utils import strip_llm_noise
 from src.models import Document, DocumentChunk
 from src.ports import LLMClientPort
 
@@ -86,8 +87,6 @@ _CODEFENCE_PATTERN = re.compile(
     r'^```[^\n]*\n(.*?)```\s*$',
     re.DOTALL,
 )
-_THINK_PATTERN = re.compile(r'<think>.*?</think>', re.DOTALL)
-_GENERIC_TAG_PATTERN = re.compile(r'<\|[^>]+>', re.DOTALL)
 _KEYWORDS_FIELD_PATTERN = re.compile(
     r'(?m)^keywords:\s*\n((?:[ \t]*-[^\n]*\n)+)',
 )
@@ -111,20 +110,9 @@ def _strip_thinking_preamble(text: str) -> str:
 
 
 def _parse_llm_output(raw: str) -> str:
-    cleaned = _THINK_PATTERN.sub('', raw)
-    cleaned = _GENERIC_TAG_PATTERN.sub('', cleaned)
-    lines = cleaned.splitlines()
-    trimmed_lines: List[str] = []
-    found_fence = False
-    for line in lines:
-        if not found_fence and line.strip() in ('', 'thought', 'model', 'user'):
-            continue
-        found_fence = True
-        trimmed_lines.append(line)
-    cleaned = '\n'.join(trimmed_lines).strip()
-    m = _CODEFENCE_PATTERN.match(cleaned)
-    if m:
-        cleaned = m.group(1).strip()
+    """P3: 노이즈 제거를 llm_utils.strip_llm_noise 로 위임하고
+    front-matter preamble 제거만 이 함수가 담당한다."""
+    cleaned = strip_llm_noise(raw)
     cleaned = _strip_thinking_preamble(cleaned)
     return cleaned.strip()
 
