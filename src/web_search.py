@@ -16,7 +16,15 @@ class SearchResult:
         return f"[{self.title}]({self.url})\n{self.snippet}"
 
 
-class SearXNGClient:
+class WebSearchClientPort:
+    def search(self, query: str, language: str = "ko-KR") -> List[SearchResult]:
+        raise NotImplementedError
+
+    def format_for_prompt(self, results: List[SearchResult]) -> str:
+        raise NotImplementedError
+
+
+class SearXNGClient(WebSearchClientPort):
     def __init__(self, base_url: str, timeout: int = 10, max_results: int = 5):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
@@ -53,10 +61,10 @@ class SearXNGClient:
     def format_for_prompt(self, results: List[SearchResult]) -> str:
         if not results:
             return ""
-        lines = ["[\uc6f9 검색 무결 자료]"]
+        lines = ["[웹 검색 무결 자료]"]
         for i, r in enumerate(results, 1):
             lines.append(f"{i}. {r.title}")
             lines.append(f"   URL: {r.url}")
             if r.snippet:
-                lines.append(f"   \uc694약: {r.snippet[:300]}")
+                lines.append(f"   요약: {r.snippet[:300]}")
         return "\n".join(lines)
