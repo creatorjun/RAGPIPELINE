@@ -3,8 +3,8 @@ from datetime import date
 from typing import List, Optional
 import re
 
-from src.llm_client import LLMClient
 from src.models import Document, DocumentChunk
+from src.ports import LLMClientPort
 
 _EXTRACT_SYSTEM = """You are a technical document editor. Extract only the relevant sections as instructed."""
 
@@ -183,7 +183,7 @@ def _ensure_keywords_present(refined: str, required_keywords: List[str]) -> str:
 
 
 class Refiner:
-    def __init__(self, llm: LLMClient, augmenter=None):
+    def __init__(self, llm: LLMClientPort, augmenter=None):
         self._llm = llm
         self._augmenter = augmenter
 
@@ -211,7 +211,7 @@ class Refiner:
         domains_yaml = "[\n" + "".join(f"    - {d}\n" for d in domains) + "  ]"
         kw_hint = ", ".join(required_keywords) if required_keywords else "extract from source"
         retry_instruction = (
-            f"[PREVIOUS ATTEMPT FAILED — JUDGE FEEDBACK]\n{retry_hint}\n\nFix the above issue strictly.\n\n"
+            f"[PREVIOUS ATTEMPT FAILED \u2014 JUDGE FEEDBACK]\n{retry_hint}\n\nFix the above issue strictly.\n\n"
             if retry_hint
             else ""
         )
