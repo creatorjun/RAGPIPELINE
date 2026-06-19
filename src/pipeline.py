@@ -1,8 +1,8 @@
 # src/pipeline.py
 """
-오토케스튤레이션 (일괄 실행 럨너).
+오케스트레이션 (일괄 실행 런너).
 
-SRP 역할: 처리 대상 문서 목록을 결정하고, concurrency 맨니저로
+SRP 역할: 처리 대상 문서 목록을 결정하고, concurrency 매니저로
          DocumentRunner 에 위임한다.
 """
 from __future__ import annotations
@@ -26,10 +26,16 @@ from src.web_search import SearXNGClient
 
 
 class PipelineOrchestrator:
-    """오토케스트레이션.
+    """오케스트레이션.
 
     의존성 연결 + 실행 제어만 담당하고
     세부 로직은 DocumentRunner / PipelineIO 에 위임한다.
+
+    Note:
+        concurrency > 1 시 DocumentRunner 인스턴스를 공유하지만
+        run() 내부에서 log_entry 를 매번 새로 생성하므로 thread-safe 하다.
+        향후 DocumentRunner 에 인스턴스 상태가 추가될 경우
+        per-document runner 팩토리 패턴으로 전환할 것.
     """
 
     def __init__(self, config: AppConfig):
@@ -66,7 +72,12 @@ class PipelineOrchestrator:
             min_sections=config.pipeline.min_sections,
         )
         judge: Optional[JudgeLLM] = (
-            JudgeLLM(llm, max_tokens=config.judge.max_tokens)
+            JudgeLLM(
+                llm,
+                max_tokens=config.judge.max_tokens,
+                # BUG-C FIX: config 에서 judge_input_chars 주입
+                judge_input_chars=config.judge.judge_input_chars,
+            )
             if config.judge.enabled
             else None
         )
@@ -97,7 +108,8 @@ class PipelineOrchestrator:
             print(
                 f"[INFO] Judge LLM 활성화 "
                 f"(model={self._cfg.model.model_name}, "
-                f"on_error={self._cfg.judge.on_error})"
+                f"on_error={self._cfg.judge.on_error}, "
+                f"judge_input_chars={self._cfg.judge.judge_input_chars})"
             )
 
         all_docs = load_all_documents(

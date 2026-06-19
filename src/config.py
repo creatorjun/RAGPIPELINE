@@ -29,14 +29,25 @@ class PipelineConfig(BaseModel):
 
 
 class JudgeConfig(BaseModel):
+    """Judge LLM 동작 설정.
+
+    Attributes:
+        enabled:        Judge 활성화 여부.
+        max_tokens:     Judge 응답 최대 토큰 수.
+        on_error:       JudgeError 발생 시 정책.
+                        ``"fail"`` (default) — 판정 실패를 문서 실패로 처리.
+                        ``"skip"``           — 판정 실패를 무시하고 성공으로 진행.
+        judge_input_chars: Judge 에 전달하는 원본/정제 문서 최대 문자 수.
+                           BUG-C FIX: 하드코딩 6000 → 설정값으로 외부화.
+    """
     enabled: bool = True
     max_tokens: int = 1024
     on_error: Literal["skip", "fail"] = "fail"
-    """JudgeError 발생 시 정책.
-    
-    - ``"fail"``  (default) — 판정 실패를 문서 실패로 처리한다.
-    - ``"skip"``            — 판정 실패를 무시하고 성공으로 진행한다.
-    """
+    judge_input_chars: int = Field(
+        default=6000,
+        ge=1000,
+        description="Judge 에 전달할 원본/정제 문서의 최대 문자 수 (기본 6000)",
+    )
 
 
 class DomainConfig(BaseModel):

@@ -14,9 +14,9 @@ from src.ports import LLMClientPort
 
 class JudgeError(RuntimeError):
     """판정 LLM 호출 실패 또는 응답 파싱 실패 시 발생한다.
-    
+
     Silent False-positive(판정 실패를 passed=True로 묵인)를 대신하여
-    호출측(pipeline.py)에서 명시적 정책을 채택하게 한다.
+    호출측(pipeline_runner.py)에서 명시적 정책을 채택하게 한다.
     """
 
 
@@ -104,9 +104,11 @@ class JudgeLLM:
     파이프라인에서 *skip* 할지 *fail* 시킬지는 호출측이 결정한다.
     """
 
-    def __init__(self, llm: LLMClientPort, max_tokens: int = 1024):
+    def __init__(self, llm: LLMClientPort, max_tokens: int = 1024, judge_input_chars: int = 6000):
         self._llm = llm
         self._max_tokens = max_tokens
+        # BUG-C FIX: 하드코딩 6000 → 생성자 주입으로 설정값 외부화
+        self._judge_input_chars = judge_input_chars
 
     def judge(
         self,
@@ -115,9 +117,10 @@ class JudgeLLM:
         source_file: str = "",
     ) -> JudgeVerdict:
         """Raise JudgeError if the LLM call or response parsing fails."""
+        limit = self._judge_input_chars
         user_prompt = _USER_TEMPLATE.format(
-            original=original_text[:6000],
-            refined=refined_text[:6000],
+            original=original_text[:limit],
+            refined=refined_text[:limit],
         )
         try:
             raw = self._llm.generate_isolated(

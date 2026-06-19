@@ -5,7 +5,7 @@ import re
 
 from src.llm_utils import strip_llm_noise
 from src.models import Document, DocumentChunk
-from src.ports import LLMClientPort
+from src.ports import AugmenterPort, LLMClientPort
 
 _EXTRACT_SYSTEM = """You are a technical document editor. Extract only the relevant sections as instructed."""
 
@@ -110,7 +110,7 @@ def _strip_thinking_preamble(text: str) -> str:
 
 
 def _parse_llm_output(raw: str) -> str:
-    """P3: 노이즈 제거를 llm_utils.strip_llm_noise 로 위임하고
+    """노이즈 제거를 llm_utils.strip_llm_noise 로 위임하고
     front-matter preamble 제거만 이 함수가 담당한다."""
     cleaned = strip_llm_noise(raw)
     cleaned = _strip_thinking_preamble(cleaned)
@@ -171,7 +171,8 @@ def _ensure_keywords_present(refined: str, required_keywords: List[str]) -> str:
 
 
 class Refiner:
-    def __init__(self, llm: LLMClientPort, augmenter=None):
+    def __init__(self, llm: LLMClientPort, augmenter: Optional[AugmenterPort] = None):
+        # DESIGN-B FIX: augmenter 타입을 AugmenterPort Protocol 로 명시
         self._llm = llm
         self._augmenter = augmenter
 

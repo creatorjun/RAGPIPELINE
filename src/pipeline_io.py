@@ -3,9 +3,9 @@
 I/O 책임만 담당하는 독립 모듈.
 
 PipelineOrchestrator God-class 를 분석하여 다음의 SRP 단위로 정리한다.
-  - pipeline_io.py   ← 파일시스템 I/O (init_dirs, save_output, log)
-  - pipeline_runner.py ← 단일 문서 실행 로직
-  - pipeline.py      ← 오토케스트레이션 (일괄 실행 럨너)
+  - pipeline_io.py     <- 파일시스템 I/O (init_dirs, save_output, log)
+  - pipeline_runner.py <- 단일 문서 실행 로직
+  - pipeline.py        <- 오케스트레이션 (일괄 실행 런너)
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from src.config import AppConfig
 
 
 class PipelineIO:
-    """디렉토리 초기화, 로그 쓰기, 출력 파일 저장을 채임진다."""
+    """디렉토리 초기화, 로그 쓰기, 출력 파일 저장을 책임진다."""
 
     def __init__(self, cfg: AppConfig):
         self._cfg = cfg
@@ -54,8 +54,16 @@ class PipelineIO:
     # ------------------------------------------------------------------
 
     def write_log(self, entry: dict) -> None:
-        """JSONL 로그에 한 줄을 thread-safe 하게 기록한다."""
+        """JSONL 로그에 한 줄을 thread-safe 하게 기록한다.
+
+        BUG-B FIX: open_log() 호출 전에 write_log()가 호출되면
+        조용히 데이터를 버리는 대신 경고를 출력한다.
+        """
         if self._log_path is None:
+            print(
+                "[WARN] write_log() called before open_log() "
+                f"— entry dropped: {entry.get('source_file', '?')} / stage={entry.get('stage', '?')}"
+            )
             return
         with self._log_lock:
             with open(self._log_path, "a", encoding="utf-8") as f:
