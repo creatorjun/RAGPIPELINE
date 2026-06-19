@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-import shutil
+import pathlib
 import signal
 import subprocess
 import sys
@@ -23,6 +23,22 @@ def _is_port_bound(host: str, port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+def _find_vllm_mlx() -> str:
+    venv_bin = pathlib.Path(sys.executable).parent
+    candidate = venv_bin / "vllm-mlx"
+    if candidate.exists():
+        return str(candidate)
+    import shutil
+    found = shutil.which("vllm-mlx")
+    if found:
+        return found
+    raise FileNotFoundError(
+        "vllm-mlx 실행파일을 찾을 수 없습니다.\n"
+        f"  시도한 경로: {candidate}\n"
+        "  설치 확인: pip install vllm-mlx"
+    )
 
 
 class ModelServerError(RuntimeError):
@@ -183,9 +199,9 @@ class ModelServer:
             return self._build_mlx_lm_cmd(sys.executable)
 
     def _build_vllm_mlx_cmd(self) -> list[str]:
-        vllm_mlx = shutil.which("vllm-mlx") or "vllm-mlx"
+        executable = _find_vllm_mlx()
         cmd = [
-            vllm_mlx, "serve",
+            executable, "serve",
             self._model_path,
             "--host", self._host,
             "--port", str(self._port),
