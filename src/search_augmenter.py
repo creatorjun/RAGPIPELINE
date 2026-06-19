@@ -5,8 +5,8 @@ import json
 import re
 from typing import List
 
-from src.llm_client import LLMClient
-from src.web_search import SearXNGClient
+from src.ports import LLMClientPort
+from src.web_search import WebSearchClientPort
 
 _JUDGE_SYSTEM = """당신은 기술 문서 업데이트 필요성을 판단하는 전문가입니다.
 주어진 문서를 분석하여 실제 인터넷 검색이 필요한 쿼리만 JSON으로 출력하세요.
@@ -35,11 +35,11 @@ _AUGMENT_SYSTEM = """당신은 기술 문서 편집자입니다.
 
 [규칙]
 1. 웹 검색 결과에서 실제로 유용한 정보만 반영하세요.
-2. 검색 결과는 참고 자료일 뿐 — 확인되지 않은 정보를 사실처럼 기술하지 마세요.
+2. 검색 결과는 참고 자료일 뿐 \u2014 확인되지 않은 정보를 사실첫럼 기술하지 마세요.
 3. 기존 문서의 YAML front-matter 구조는 반드시 유지하세요.
 4. 검색 결과가 문서와 무관하면 원문 그대로 반환하세요.
 5. Output ONLY the document. Do not include preamble, explanation, or thinking text.
-6. Do NOT include any [web ref ...] or [웹 참조 ...] annotation tags in the final output."""
+6. Do NOT include any [web ref ...] or [\uc6f9 \ucc38\uc870 ...] annotation tags in the final output."""
 
 _AUGMENT_USER_TEMPLATE = """[기존 정제 문서]
 {refined}
@@ -52,7 +52,7 @@ Output ONLY the document starting with ---"""
 _THINK_PATTERN = re.compile(r'<think>.*?</think>', re.DOTALL)
 _GENERIC_TAG_PATTERN = re.compile(r'<\|[^>]+>', re.DOTALL)
 _CODEFENCE_PATTERN = re.compile(r'^```[^\n]*\n(.*?)```\s*$', re.DOTALL)
-_WEB_REF_TAG_PATTERN = re.compile(r'\[(?:웹 참조|web ref)[^\]]*\]', re.IGNORECASE)
+_WEB_REF_TAG_PATTERN = re.compile(r'\[(?:\uc6f9 \ucc38\uc870|web ref)[^\]]*\]', re.IGNORECASE)
 
 
 def _clean_augment_output(raw: str, fallback: str) -> str:
@@ -113,7 +113,7 @@ def _extract_json_object(text: str) -> dict | None:
 
 
 class SearchAugmenter:
-    def __init__(self, llm: LLMClient, searxng: SearXNGClient, enabled: bool = True):
+    def __init__(self, llm: LLMClientPort, searxng: WebSearchClientPort, enabled: bool = True):
         self._llm = llm
         self._searxng = searxng
         self._enabled = enabled
@@ -146,7 +146,7 @@ class SearchAugmenter:
             try:
                 results = self._searxng.search(query)
                 all_results.extend(results)
-                print(f"\n[SEARCH] {source_file} — '{query}' ({len(results)}건)")
+                print(f"\n[SEARCH] {source_file} \u2014 '{query}' ({len(results)}건)")
             except Exception as exc:
                 print(f"\n[SEARCH WARN] {query} 실패: {exc}")
 
