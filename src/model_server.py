@@ -4,9 +4,17 @@ LLM 서버 자동 기동 / 헬스체크 / 종료 모듈.
 
 지원 백엔드::
 
-    mlx_lm   — Apple Silicon 전용. python -m mlx_lm.server
-    mlx_vllm — Apple Silicon 전용. python -m mlx_vllm.entrypoints.openai.api_server
+    mlx_lm   — Apple Silicon 전용. python -m mlx_lm server
+               health: GET /health  (200 OK)
+               base_url: http://host:port/v1
+
+    mlx_vllm — mlx-vlm 패키지. mlx_vlm.server
+               health: GET /health  (200 OK, mlx-vlm 0.5+ 지원)
+               base_url: http://host:port  (/v1 없음)
+
     vllm     — x64 (CUDA / ROCm). python -m vllm.entrypoints.openai.api_server
+               health: GET /health  (200 OK)
+               base_url: http://host:port/v1
 
 사용 방식::
 
@@ -45,7 +53,8 @@ from src.config import AppConfig, ServerConfig
 # Helper
 # ---------------------------------------------------------------------------
 
-def _health_url(host: str, port: int) -> str:
+def _health_url(host: str, port: int, backend: str) -> str:
+    """backend 에 따라 /health 엔드포인트 URL 을 반환한다."""
     return f"http://{host}:{port}/health"
 
 
@@ -71,10 +80,10 @@ class ModelServerError(RuntimeError):
 
 
 class ModelServer:
-    """mlx_lm / mlx_vllm / vllm 서버를 하위 프로세스로 기동한다.
+    """mlx_lm / mlx_vllm(mlx-vlm) / vllm 서버를 하위 프로세스로 기동한다.
 
     Args:
-        model_path:            HuggingFace repo ID 또는 로컬 디렉터리
+        model_path:            HuggingFace repo ID 또는 로컈 디렉터리
         host:                  리스닝 호스트 (기본 0.0.0.0)
         port:                  리스닝 포트 (기본 8000)
         backend:               ``"mlx_lm"``, ``"mlx_vllm"``, 또는 ``"vllm"``
@@ -197,15 +206,17 @@ class ModelServer:
     def wait_ready(self, timeout: Optional[int] = None) -> None:
         """서버가 /health 엔드포인트에 200 OK 를 반환할 때까지 대기한다.
 
+        mlx_vllm(mlx-vlm) 의 경우 /health 가 없으면 /chat/completions 로 폴백.
+
         Raises:
             ModelServerError: timeout 내 준비가 완료되지 않으면.
         """
         limit = timeout if timeout is not None else self._startup_timeout
-        url = _health_url(
-            "127.0.0.1" if self._host == "0.0.0.0" else self._host,
-            self._port,
-        )
-        print(f"[ModelServer] 준비 대기 ({url}, 제한={limit}s) ...", flush=True)
+        check_host = "127.0.0.1" if self._host == "0.0.0.0" else self._host
+        health_url = f"http://{check_host}:{self._port}/health"
+        fallback_url = f"http://{check_host}:{self._port}/chat/completions"
+
+        print(f"[ModelServer] 준비 대기 ({health_url}, 제한={limit}s) ...", flush=True)
         deadline = time.monotonic() + limit
 
         while time.monotonic() < deadline:
@@ -215,12 +226,25 @@ class ModelServer:
                     "모델 경로나 서버 설정을 확인하세요."
                 )
             try:
-                r = requests.get(url, timeout=2)
+                r = requests.get(health_url, timeout=2)
                 if r.status_code == 200:
                     print("[ModelServer] 서버 준비 완료.", flush=True)
                     return
             except requests.exceptions.RequestException:
                 pass
+
+            # mlx-vlm 은 /health 대신 /chat/completions 엔드포인트를 제공
+            if self._backend == "mlx_vllm":
+                try:
+                    # OPTIONS 또는 GET 요청으로 엔드포인트 존재 확인
+                    r2 = requests.get(fallback_url, timeout=2)
+                    # 404/405/422 등 HTTP 에러도 서버가 떴 있다는 신호
+                    if r2.status_code in (200, 404, 405, 422):
+                        print("[ModelServer] 서버 준비 완료 (mlx-vlm).", flush=True)
+                        return
+                except requests.exceptions.RequestException:
+                    pass
+
             time.sleep(2)
 
         self.stop()
@@ -250,8 +274,14 @@ class ModelServer:
 
     @property
     def base_url(self) -> str:
-        """LLMClient 에 주입할 OpenAI-compatible base URL."""
+        """LLMClient 에 주입할 OpenAI-compatible base URL.
+
+        mlx_vllm(mlx-vlm): base URL 에 /v1 접미사 없음
+        mlx_lm / vllm    : /v1 있음
+        """
         host = "127.0.0.1" if self._host == "0.0.0.0" else self._host
+        if self._backend == "mlx_vllm":
+            return f"http://{host}:{self._port}"
         return f"http://{host}:{self._port}/v1"
 
     # ------------------------------------------------------------------
@@ -262,23 +292,23 @@ class ModelServer:
         """backend 설정에 따라 CLI 명령어를 조립한다."""
         python = sys.executable
         if self._backend == "mlx_vllm":
-            return self._build_mlx_vllm_cmd(python)
+            return self._build_mlx_vlm_cmd(python)
         elif self._backend == "vllm":
             return self._build_vllm_cmd(python)
         else:  # mlx_lm (default)
             return self._build_mlx_lm_cmd(python)
 
     def _build_mlx_lm_cmd(self, python: str) -> list[str]:
-        """mlx_lm.server CLI (Apple Silicon 전용)
+        """mlx_lm server CLI (Apple Silicon 전용)
 
         Example::
 
-            python -m mlx_lm.server \\
+            python -m mlx_lm server \\
                 --model mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit \\
                 --host 0.0.0.0 --port 8000 --max-tokens 4096
         """
         cmd = [
-            python, "-m", "mlx_lm.server",
+            python, "-m", "mlx_lm", "server",
             "--model", self._model_path,
             "--host", self._host,
             "--port", str(self._port),
@@ -289,29 +319,30 @@ class ModelServer:
         cmd.extend(self._extra_args)
         return cmd
 
-    def _build_mlx_vllm_cmd(self, python: str) -> list[str]:
-        """mlx_vllm API 서버 CLI (Apple Silicon 전용)
+    def _build_mlx_vlm_cmd(self, python: str) -> list[str]:
+        """mlx-vlm 서버 CLI (Apple Silicon 전용)
+
+        mlx-vlm 이 제공하는 OpenAI-compatible 서버.
+        엔트리포인트: mlx_vlm.server
+        기본 포트: 8080 (config 로 원하는 포트로 변경 가능)
 
         Example::
 
-            python -m mlx_vllm.entrypoints.openai.api_server \\
-                --model mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit \\
-                --host 0.0.0.0 --port 8000 --max-model-len 8192
+            python -m mlx_vlm.server \\
+                --model mlx-community/gemma-4-e2b-it-4bit \\
+                --host 0.0.0.0 --port 8001
         """
         cmd = [
-            python, "-m", "mlx_vllm.entrypoints.openai.api_server",
+            python, "-m", "mlx_vlm.server",
             "--model", self._model_path,
             "--host", self._host,
             "--port", str(self._port),
-            "--max-model-len", str(self._max_tokens * 2),
         ]
-        if self._trust_remote_code:
-            cmd.append("--trust-remote-code")
         cmd.extend(self._extra_args)
         return cmd
 
     def _build_vllm_cmd(self, python: str) -> list[str]:
-        """표준 vLLM API 서버 CLI (x64 CUDA / ROCm 전용)
+        """vLLM API 서버 CLI (x64 CUDA / ROCm 전용)
 
         Example::
 
@@ -348,6 +379,6 @@ class ModelServer:
         if not alive:
             raise ModelServerError(
                 f"[ModelServer] managed=false 인데 {self._host}:{self._port} 에 서버가 없습니다. "
-                "외부에서 mlx_lm / mlx_vllm / vllm 서버를 먼저 시작하세요."
+                "외부에서 mlx_lm / mlx_vlm / vllm 서버를 먼저 시작하세요."
             )
         print(f"[ModelServer] managed=false — 외부 서버 사용 ({self._host}:{self._port})", flush=True)
