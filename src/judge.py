@@ -5,21 +5,21 @@ import json
 import re
 from typing import Optional
 
-from src.llm_client import LLMClient
 from src.models import JudgeVerdict
+from src.ports import LLMClientPort
 
 _JUDGE_SYSTEM = """You are a brutally critical technical document reviewer.
 Your sole purpose is to find flaws in a refined internal document.
-You have NO prior context — evaluate ONLY what is given to you right now.
+You have NO prior context \u2014 evaluate ONLY what is given to you right now.
 
 Evaluation criteria:
-1. FAITHFULNESS  — Every factual claim in the refined document must be traceable
+1. FAITHFULNESS  \u2014 Every factual claim in the refined document must be traceable
    to the original source. Any number, version, command, or procedure that
    appears in the refined text but NOT in the original is a hallucination.
-2. COMPLETENESS  — All critical information from the original (steps, warnings,
+2. COMPLETENESS  \u2014 All critical information from the original (steps, warnings,
    commands, configs, version numbers) must be present in the refined text.
    Omissions of safety-critical or operational details are hard failures.
-3. STRUCTURE     — The document must begin with a valid YAML front-matter block
+3. STRUCTURE     \u2014 The document must begin with a valid YAML front-matter block
    (--- ... ---), contain at least one H2 section, and have a non-empty body.
 
 Bias rules:
@@ -94,15 +94,7 @@ def _parse_verdict(raw: str) -> Optional[JudgeVerdict]:
 
 
 class JudgeLLM:
-    """
-    완전히 격리된 컨텍스트에서 동작하는 Judge LLM.
-    - temperature=0 으로 고정해 결정론적 판정을 보장한다.
-    - 동일한 모델·엔드포인트를 사용하되 새 OpenAI 클라이언트 인스턴스로
-      생성 LLM의 대화 컨텍스트와 완전히 분리된다.
-    - 시스템 프롬프트는 비판적(adversarial) 관점으로 고정된다.
-    """
-
-    def __init__(self, llm: LLMClient, max_tokens: int = 1024):
+    def __init__(self, llm: LLMClientPort, max_tokens: int = 1024):
         self._llm = llm
         self._max_tokens = max_tokens
 
@@ -132,7 +124,7 @@ class JudgeLLM:
                 faithfulness=True,
                 completeness=True,
                 structure_ok=True,
-                critique="Judge LLM unavailable — skipped",
+                critique="Judge LLM unavailable \u2014 skipped",
                 retry_hint="none",
             )
 
@@ -144,7 +136,7 @@ class JudgeLLM:
                 faithfulness=True,
                 completeness=True,
                 structure_ok=True,
-                critique="Judge parse error — skipped",
+                critique="Judge parse error \u2014 skipped",
                 retry_hint="none",
             )
 
