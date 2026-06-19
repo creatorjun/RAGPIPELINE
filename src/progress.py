@@ -65,12 +65,16 @@ class ProgressReporter:
         avg = elapsed / self._done if self._done else 0.0
 
         print("\n" + "=" * 52)
-        print("  \uc2e4\ud589 \uc644\ub8cc \uc694\uc57d")
+        print("  실행 완료 요약")
         print("=" * 52)
-        print(f"  \uc804\uccb4 \ubb38\uc11c  : {self._total}\uac74")
-        print(f"  \uc131\uacf5        : {self._success}\uac74")
-        print(f"  \uc2a4\ud0b5        : {self._skip}\uac74")
-        print(f"  \uc2e4\ud328        : {self._fail}\uac74")
-        print(f"  \uc18c\uc694 \uc2dc\uac04  : {elapsed_str}")
-        print(f"  \ud3c9\uade0 \ucc98\ub9ac  : {avg:.1f}\ucd08/\uac74")
+        print(f"  전체 문서  : {self._total}건")
+        print(f"  성공        : {self._success}건")
+        print(f"  스킵        : {self._skip}건")
+        print(f"  실패        : {self._fail}건")
+        print(f"  소요 시간  : {elapsed_str}")
+        print(f"  평균 처리  : {avg:.1f}초/건")
         print("=" * 52)
+
+
+# pipeline.py 가 ProgressTracker 이름으로 임포트하므로 alias 제공
+ProgressTracker = ProgressReporter
