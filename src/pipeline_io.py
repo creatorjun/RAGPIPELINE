@@ -5,7 +5,7 @@ I/O 책임만 담당하는 독립 모듈.
 PipelineOrchestrator God-class 를 분석하여 다음의 SRP 단위로 정리한다.
   - pipeline_io.py     <- 파일시스템 I/O (init_dirs, save_output, log)
   - pipeline_runner.py <- 단일 문서 실행 로직
-  - pipeline.py        <- 오케스트레이션 (일괄 실행 런너)
+  - pipeline.py        <- 오케스트레이션 (일괄 실행 러너)
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class PipelineIO:
     # ------------------------------------------------------------------
 
     def init_dirs(self) -> None:
-        """config 에 정의된 입력/출력/로그 디렉토리를 생성한다."""
+        """디렉토리 생성."""
         for domain in self._cfg.domains:
             Path(self._cfg.pipeline.output_dir, domain.output_folder).mkdir(
                 parents=True, exist_ok=True
@@ -39,9 +39,14 @@ class PipelineIO:
         Path(self._cfg.pipeline.log_dir).mkdir(parents=True, exist_ok=True)
         Path(self._cfg.pipeline.input_dir).mkdir(parents=True, exist_ok=True)
 
-    def open_log(self) -> Path:
-        """JSONL 로그 파일을 열고 경로를 반환한다."""
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    def open_log(self, run_ts: Optional[str] = None) -> Path:
+        """JSONL 로그 파일을 열고 경로를 반환한다.
+
+        Args:
+            run_ts: 외부에서 주입하는 타임스탬프 문자열.
+                    None 이면 현재 시각 사용.
+        """
+        ts = run_ts or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._log_path = Path(self._cfg.pipeline.log_dir) / f"pipeline_run_{ts}.jsonl"
         return self._log_path
 
@@ -54,11 +59,7 @@ class PipelineIO:
     # ------------------------------------------------------------------
 
     def write_log(self, entry: dict) -> None:
-        """JSONL 로그에 한 줄을 thread-safe 하게 기록한다.
-
-        BUG-B FIX: open_log() 호출 전에 write_log()가 호출되면
-        조용히 데이터를 버리는 대신 경고를 출력한다.
-        """
+        """JSONL 로그에 한 줄을 thread-safe 하게 기록한다."""
         if self._log_path is None:
             print(
                 "[WARN] write_log() called before open_log() "
@@ -74,7 +75,7 @@ class PipelineIO:
     # ------------------------------------------------------------------
 
     def save_output(self, refined_text: str, source_file: str, domains: list[str]) -> list[str]:
-        """지정된 도메인별 출력 폴더에 정제 문서를 저장하고 저장 경로 목록을 반환한다."""
+        """정제 문서를 도메인별 출력 폴더에 저장하고 저장 경로 목록을 반환한다."""
         saved: list[str] = []
         for domain in domains:
             folder = self._cfg.get_output_folder(domain)

@@ -1,29 +1,31 @@
 # config.yaml
-# \uc804\uccb4 \ud30c\uc774\ud504\ub77c\uc778 \ub2e8\uc77c \uc9c4\uc2e4 \ucd9c\ucc98(Single Source of Truth)
+# 전체 파이프라인 단일 진실 출처(Single Source of Truth)
 
-# --- LLM \ud074\ub77c\uc774\uc5b8\ud2b8 \uc811\uc18d \uc815\ubcf4 -------------------------------------------
+# --- LLM 클라이언트 접속 정보 -------------------------------------------
 model:
-  base_url: http://127.0.0.1:8000/v1   # server.managed=false \uc77c \ub54c \uc0ac\uc6a9
+  base_url: http://127.0.0.1:8000/v1   # server.managed=false 일 때 사용
   api_key: sk-no-key-required
   model_name: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
   max_tokens: 4096
   temperature: 0.1
   top_p: 0.9
 
-# --- \uc11c\ubc84 \uc790\ub3d9 \uae30\ub3d9 \uc124\uc815 ----------------------------------------------------
-# managed: true  -> run.py \uc2e4\ud589 \uc2dc \uc11c\ubc84\ub97c \uc790\ub3d9 \uae30\ub3d9/\uc885\ub8cc\ud569\ub2c8\ub2e4.
-# managed: false -> \uc678\ubd80\uc5d0\uc11c \uc774\ubbf8 \ub5a0\uc78c \uc11c\ubc84\ub97c \uac00\uc815\ud569\ub2c8\ub2e4.
+# --- 서버 자동 기동 설정 ----------------------------------------------------
 server:
   managed: true
-  model_path: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit   # \uc9c0\uc815 \uc548 \ud558\uba74 model.model_name \uc0ac\uc6a9
+  model_path: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
   host: 0.0.0.0
   port: 8000
   backend: mlx_lm        # mlx_lm | mlx_vllm
   trust_remote_code: false
-  extra_args: []         # \uc11c\ubc84 CLI \uc5d0 \ucd94\uac00\ud560 \uc778\uc218 (\uc608: ["--log-level", "debug"])
-  startup_timeout: 180   # \ucd08 (\ub300\ud615 \ubaa8\ub378\uc740 120\u2015180\ucd08 \uc18c\uc694)
+  extra_args: []
+  startup_timeout: 180
 
-# --- \uc815\uc81c \ud30c\uc774\ud504\ub77c\uc778 \uc124\uc815 -------------------------------------------------
+# --- 로깅 설정 -----------------------------------------------------------------
+logging:
+  llm_log_enabled: true   # false 로 바꾸면 llm_*.log 생성 안 함
+
+# --- 정제 파이프라인 설정 -------------------------------------------------
 pipeline:
   input_dir: ./as_is
   output_dir: ./to_be
@@ -37,33 +39,33 @@ pipeline:
   resume: true
   concurrency: 1
 
-# --- Judge LLM \uc124\uc815 -------------------------------------------------------
+# --- Judge LLM 설정 -------------------------------------------------------
 judge:
   enabled: true
   max_tokens: 1024
   on_error: fail         # skip | fail
   judge_input_chars: 6000
 
-# --- SearXNG \uc6f9 \uac80\uc0c9 \ubcf4\uac15 (\uc120\ud0dd) ----------------------------------------
+# --- SearXNG 웹 검색 보강 (선택) ----------------------------------------
 search:
   enabled: false
   base_url: http://localhost:8080
   timeout: 10
   max_results: 5
 
-# --- \ub3c4\uba54\uc778 \uc815\uc758 (이 \ubaa9\ub85d\uc774 DomainFilter \uc720\ud6a8 \ub3c4\uba54\uc778\uacfc \uc790\ub3d9 \ub3d9\uae30\ud654) -----
+# --- 도메인 정의 -----------------------------------------------------------
 domains:
   - name: build
     output_folder: build
-    keywords: [\uad6c\ucd95, \uc124\uce58, \ubc30\ud3ec, \uc124\uacc4, \ud658\uacbd, \uc778\ud504\ub77c, \uad6c\uc131]
+    keywords: [구축, 설치, 배포, 설계, 환경, 인프라, 구성]
   - name: maintenance
     output_folder: maintenance
-    keywords: [\uc6b4\uc601, \uc720\uc9c0\ubcf4\uc218, \ubaa8\ub2c8\ud130\ub9c1, \ubc31\uc5c5, \ud29c\ub2dd, \uc810\uac80, \ucd5c\uc801\ud654]
+    keywords: [운영, 유지보수, 모니터링, 백업, 튜닝, 점검, 최적화]
   - name: incident
     output_folder: incident
-    keywords: [\uc7a5\uc560, \uc5d0\ub7ec, \ubcf5\uad6c, \ub864\ubc31, RCA, \uc778\uc2dc\ub358\ud2b8, \ub300\uc751]
+    keywords: [장애, 에러, 복구, 롤백, RCA, 인시던트, 대응]
 
-# --- RAG \uc778\ub371\uc2f1 / \uac80\uc0c9 \uc124\uc815 -------------------------------------------
+# --- RAG 인덱싱 / 검색 설정 -------------------------------------------
 rag:
   embedding_model: BAAI/bge-m3
   qdrant_path: ./qdrant_db

@@ -1,157 +1,122 @@
 # src/pipeline.py
 """
-오케스트레이션 (일괄 실행 런너).
+Phase 1·2 오케스트레이터.
 
-SRP 역할: 처리 대상 문서 목록을 결정하고, concurrency 매니저로
-         DocumentRunner 에 위임한다.
+PipelineOrchestrator 는 다음을 조합한다:
+  - PipelineIO    (디렉토리 아래 파일 출력 / JSONL 로깅)
+  - LLMLogger     (LLM 요청·응답 전체 로깅)
+  - LLMClient     (OpenAI-compatible 데서보 접속)
+  - DocumentRunner(단일 문서 처리)
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Set
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List
 
 from src.config import AppConfig
 from src.domain_filter import DomainFilter
 from src.judge import JudgeLLM
 from src.llm_client import LLMClient
-from src.loader import load_all_documents
+from src.llm_logger import LLMLogger
+from src.loader import DocumentLoader
 from src.pipeline_io import PipelineIO
 from src.pipeline_runner import DocumentRunner
-from src.progress import ProgressReporter
+from src.progress import ProgressTracker
 from src.refiner import Refiner
-from src.resume import load_processed_files
+from src.resume import ResumeTracker
 from src.search_augmenter import SearchAugmenter
-from src.validator import StructureValidator
 from src.web_search import SearXNGClient
 
 
 class PipelineOrchestrator:
-    """오케스트레이션.
+    def __init__(self, cfg: AppConfig):
+        self._cfg = cfg
+        self._io = PipelineIO(cfg)
 
-    의존성 연결 + 실행 제어만 담당하고
-    세부 로직은 DocumentRunner / PipelineIO 에 위임한다.
+    def run(self, resume: bool = True, dry_run: bool = False) -> None:
+        cfg = self._cfg
+        io = self._io
 
-    Note:
-        concurrency > 1 시 DocumentRunner 인스턴스를 공유하지만
-        run() 내부에서 log_entry 를 매번 새로 생성하므로 thread-safe 하다.
-        향후 DocumentRunner 에 인스턴스 상태가 추가될 경우
-        per-document runner 팩토리 패턴으로 전환할 것.
-    """
+        io.init_dirs()
 
-    def __init__(self, config: AppConfig):
-        self._cfg = config
+        # 로그 파일 타임스탬프 공유 (파이프라인 + LLM 로그가 동일 ts 사용)
+        run_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-        # --- infrastructure ----------------------------------------
+        log_path = io.open_log(run_ts=run_ts)
+        print(f"[Pipeline] 로그: {log_path}")
+
+        # LLM 응답 전체 로거
+        llm_logger = LLMLogger(
+            log_dir=cfg.pipeline.log_dir,
+            enabled=cfg.logging.llm_log_enabled,
+        )
+        llm_log_path = llm_logger.open(run_ts=run_ts)
+        print(f"[Pipeline] LLM 로그: {llm_log_path}")
+
         llm = LLMClient(
-            base_url=config.model.base_url,
-            api_key=config.model.api_key,
-            model_name=config.model.model_name,
-            max_tokens=config.model.max_tokens,
-            temperature=config.model.temperature,
-            top_p=config.model.top_p,
-        )
-        searxng = SearXNGClient(
-            base_url=config.search.base_url,
-            timeout=config.search.timeout,
-            max_results=config.search.max_results,
-        )
-        augmenter = SearchAugmenter(
-            llm=llm,
-            searxng=searxng,
-            enabled=config.search.enabled,
+            base_url=cfg.model.base_url,
+            api_key=cfg.model.api_key,
+            model_name=cfg.model.model_name,
+            max_tokens=cfg.model.max_tokens,
+            temperature=cfg.model.temperature,
+            top_p=cfg.model.top_p,
+            llm_logger=llm_logger,
         )
 
-        # --- domain services ---------------------------------------
         domain_filter = DomainFilter(
             llm=llm,
-            valid_domains=config.get_domain_names(),
+            valid_domains=cfg.get_domain_names(),
         )
-        refiner = Refiner(llm, augmenter=augmenter)
-        structure_validator = StructureValidator(
-            min_doc_length=config.pipeline.min_doc_length,
-            min_sections=config.pipeline.min_sections,
-        )
-        judge: Optional[JudgeLLM] = (
-            JudgeLLM(
-                llm,
-                max_tokens=config.judge.max_tokens,
-                # BUG-C FIX: config 에서 judge_input_chars 주입
-                judge_input_chars=config.judge.judge_input_chars,
-            )
-            if config.judge.enabled
-            else None
+        refiner = Refiner(llm=llm)
+        judge = JudgeLLM(
+            llm=llm,
+            enabled=cfg.judge.enabled,
+            max_tokens=cfg.judge.max_tokens,
+            on_error=cfg.judge.on_error,
+            judge_input_chars=cfg.judge.judge_input_chars,
         )
 
-        # --- I/O + runner ------------------------------------------
-        self._io = PipelineIO(config)
-        self._runner = DocumentRunner(
-            cfg=config,
-            io=self._io,
+        searxng: SearXNGClient | None = None
+        if cfg.search.enabled:
+            searxng = SearXNGClient(
+                base_url=cfg.search.base_url,
+                timeout=cfg.search.timeout,
+                max_results=cfg.search.max_results,
+            )
+        search_augmenter = SearchAugmenter(llm=llm, searxng=searxng)
+
+        loader = DocumentLoader(cfg.pipeline.input_dir)
+        resume_tracker = ResumeTracker(
+            log_dir=cfg.pipeline.log_dir,
+            enabled=resume,
+        )
+        progress = ProgressTracker()
+
+        runner = DocumentRunner(
+            cfg=cfg,
+            io=io,
             domain_filter=domain_filter,
             refiner=refiner,
-            structure_validator=structure_validator,
             judge=judge,
-            on_judge_error=config.judge.on_error,
+            search_augmenter=search_augmenter,
+            progress=progress,
         )
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        files: List[Path] = loader.load_all()
+        if resume:
+            files = resume_tracker.filter_pending(files)
 
-    def run(self, resume: Optional[bool] = None, dry_run: bool = False) -> None:
-        self._io.init_dirs()
-        log_path = self._io.open_log()
-        print(f"[INFO] 로그 파일: {log_path}")
-        if self._cfg.search.enabled:
-            print(f"[INFO] 웹 검색 보강 활성화 ({self._cfg.search.base_url})")
-        if self._cfg.judge.enabled:
-            print(
-                f"[INFO] Judge LLM 활성화 "
-                f"(model={self._cfg.model.model_name}, "
-                f"on_error={self._cfg.judge.on_error}, "
-                f"judge_input_chars={self._cfg.judge.judge_input_chars})"
-            )
+        print(f"[Pipeline] 대상 {len(files)}개 뉔스" + (" [dry-run]" if dry_run else ""))
 
-        all_docs = load_all_documents(
-            self._cfg.pipeline.input_dir,
-            self._cfg.pipeline.max_chunk_tokens,
-            self._cfg.pipeline.overlap_tokens,
-        )
-        print(f"[INFO] 입력 문서 {len(all_docs)}건 발견")
+        try:
+            for fp in files:
+                if dry_run:
+                    print(f"  [dry-run] {fp.name}")
+                    continue
+                runner.run(fp)
+                resume_tracker.mark_done(fp)
+        finally:
+            llm_logger.close()
 
-        use_resume = resume if resume is not None else self._cfg.pipeline.resume
-        docs_to_process = all_docs
-
-        if use_resume:
-            processed: Set[str] = load_processed_files(self._cfg.pipeline.log_dir)
-            skipped_names = {d.source_file for d in all_docs} & processed
-            docs_to_process = [d for d in all_docs if d.source_file not in processed]
-            if skipped_names:
-                print(f"[RESUME] 이미 완료된 문서 {len(skipped_names)}건 스킵")
-
-        if dry_run:
-            print(f"[DRY-RUN] 실제 실행 없이 종료 \u2014 처리 대상 {len(docs_to_process)}건")
-            for doc in docs_to_process:
-                print(f"  - {doc.source_file}")
-            return
-
-        concurrency = max(1, self._cfg.pipeline.concurrency)
-        reporter = ProgressReporter(total=len(docs_to_process))
-        counts: dict[str, int] = {"success": 0, "fail": 0, "skip": 0}
-
-        if concurrency == 1:
-            for doc in docs_to_process:
-                result = self._runner.run(doc)
-                counts[result] = counts.get(result, 0) + 1
-                reporter.update(result)
-        else:
-            with ThreadPoolExecutor(max_workers=concurrency) as pool:
-                futures = {pool.submit(self._runner.run, doc): doc for doc in docs_to_process}
-                for future in as_completed(futures):
-                    result = future.result()
-                    counts[result] = counts.get(result, 0) + 1
-                    reporter.update(result)
-
-        reporter.close()
-        print(f"\n[DONE] 성공={counts['success']} / 실패={counts['fail']} / 스킵={counts['skip']}")
-        print(f"[INFO] 로그: {log_path}")
+        progress.print_summary()
