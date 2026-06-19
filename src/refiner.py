@@ -79,7 +79,7 @@ More body text.
 
 Now convert the following source document. Output ONLY the converted document starting with ---. Do not include any preamble, explanation, or thinking text before the --- line.
 
-[Source Document]
+{retry_instruction}[Source Document]
 {content}"""
 
 _CODEFENCE_PATTERN = re.compile(
@@ -113,7 +113,6 @@ def _strip_thinking_preamble(text: str) -> str:
 def _parse_llm_output(raw: str) -> str:
     cleaned = _THINK_PATTERN.sub('', raw)
     cleaned = _GENERIC_TAG_PATTERN.sub('', cleaned)
-
     lines = cleaned.splitlines()
     trimmed_lines: List[str] = []
     found_fence = False
@@ -123,23 +122,19 @@ def _parse_llm_output(raw: str) -> str:
         found_fence = True
         trimmed_lines.append(line)
     cleaned = '\n'.join(trimmed_lines).strip()
-
     m = _CODEFENCE_PATTERN.match(cleaned)
     if m:
         cleaned = m.group(1).strip()
-
     cleaned = _strip_thinking_preamble(cleaned)
     return cleaned.strip()
 
 
 def _extract_frontmatter_block(text: str) -> str:
-    """YAML front-matter 블록 전체를 반환 (--- ... --- 포함)."""
     m = _FRONTMATTER_PATTERN.match(text.lstrip())
     return m.group(0) if m else ""
 
 
 def _strip_frontmatter(text: str) -> str:
-    """첫 번째 YAML front-matter 블록을 제거한 본문만 반환."""
     stripped = text.lstrip()
     m = _FRONTMATTER_PATTERN.match(stripped)
     if m:
@@ -148,7 +143,6 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def _strip_first_h1(text: str) -> str:
-    """본문 첫 번째 H1만 제거 (중복 합산 방지)."""
     m = _H1_PATTERN.search(text)
     if m:
         return text[:m.start()] + text[m.end():].lstrip('\n')
@@ -211,16 +205,23 @@ class Refiner:
         domains: List[str],
         source_file: str,
         required_keywords: Optional[List[str]] = None,
+        retry_hint: Optional[str] = None,
     ) -> str:
         today = date.today().isoformat()
         domains_yaml = "[\n" + "".join(f"    - {d}\n" for d in domains) + "  ]"
         kw_hint = ", ".join(required_keywords) if required_keywords else "extract from source"
+        retry_instruction = (
+            f"[PREVIOUS ATTEMPT FAILED — JUDGE FEEDBACK]\n{retry_hint}\n\nFix the above issue strictly.\n\n"
+            if retry_hint
+            else ""
+        )
         user_prompt = _REFINE_USER_TEMPLATE.format(
             domains_yaml=domains_yaml,
             source_file=source_file,
             today=today,
             content=chunk.content,
             required_keywords=kw_hint,
+            retry_instruction=retry_instruction,
         )
         raw = self._llm.generate(_REFINE_SYSTEM, user_prompt)
         result = _parse_llm_output(raw)
@@ -228,11 +229,22 @@ class Refiner:
             result = _ensure_keywords_present(result, required_keywords)
         return result
 
-    def refine_document(self, doc: Document, domains: List[str]) -> str:
+    def refine_document(
+        self,
+        doc: Document,
+        domains: List[str],
+        retry_hint: Optional[str] = None,
+    ) -> str:
         required_keywords = _extract_original_keywords(doc)
         refined_chunks: List[str] = []
         for chunk in doc.chunks:
-            refined = self.refine_chunk(chunk, domains, doc.source_file, required_keywords)
+            refined = self.refine_chunk(
+                chunk,
+                domains,
+                doc.source_file,
+                required_keywords,
+                retry_hint=retry_hint,
+            )
             refined_chunks.append(refined)
 
         if not refined_chunks:
@@ -244,13 +256,11 @@ class Refiner:
             head = refined_chunks[0]
             frontmatter = _extract_frontmatter_block(head)
             head_body = _strip_frontmatter(head)
-
             body_parts: List[str] = [head_body.strip()]
             for subsequent in refined_chunks[1:]:
                 body_only = _strip_frontmatter(subsequent)
                 body_only = _strip_first_h1(body_only)
                 body_parts.append(body_only.strip())
-
             merged = frontmatter + "\n".join(body_parts)
 
         if self._augmenter is not None:

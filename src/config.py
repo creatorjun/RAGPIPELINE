@@ -28,6 +28,11 @@ class PipelineConfig(BaseModel):
     concurrency: int = 1
 
 
+class JudgeConfig(BaseModel):
+    enabled: bool = True
+    max_tokens: int = 1024
+
+
 class DomainConfig(BaseModel):
     name: str
     output_folder: str
@@ -62,6 +67,7 @@ class AppConfig(BaseModel):
     glossary_path: str = "./glossary.yaml"
     search: SearchConfig = Field(default_factory=SearchConfig)
     rag: RagConfig = Field(default_factory=RagConfig)
+    judge: JudgeConfig = Field(default_factory=JudgeConfig)
 
     @classmethod
     def from_yaml(cls, path: str = "config.yaml") -> "AppConfig":

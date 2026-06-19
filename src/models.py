@@ -1,6 +1,6 @@
 # src/models.py
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -26,8 +26,19 @@ class FilterResult:
 
 
 @dataclass
+class JudgeVerdict:
+    passed: bool
+    faithfulness: bool
+    completeness: bool
+    structure_ok: bool
+    critique: str
+    retry_hint: str
+
+
+@dataclass
 class ValidationResult:
     is_valid: bool
     keyword_retention_rate: float
     errors: List[str]
     missing_keywords: List[str] = field(default_factory=list)
+    judge: Optional[JudgeVerdict] = None

@@ -10,14 +10,15 @@ from typing import List, Optional, Set
 
 from src.config import AppConfig
 from src.domain_filter import DomainFilter
+from src.judge import JudgeLLM
 from src.llm_client import LLMClient, LLMEmptyResponseError
 from src.loader import load_all_documents, load_document
-from src.models import Document
+from src.models import Document, JudgeVerdict
 from src.progress import ProgressReporter
 from src.refiner import Refiner
 from src.resume import load_processed_files
 from src.search_augmenter import SearchAugmenter
-from src.validator import Validator, strip_thinking
+from src.validator import StructureValidator, strip_thinking
 from src.web_search import SearXNGClient
 
 try:
@@ -55,10 +56,14 @@ class PipelineOrchestrator:
         )
         self._filter = DomainFilter(self._llm)
         self._refiner = Refiner(self._llm, augmenter=augmenter)
-        self._validator = Validator(
-            keyword_retention_threshold=config.pipeline.keyword_retention_threshold,
+        self._structure_validator = StructureValidator(
             min_doc_length=config.pipeline.min_doc_length,
             min_sections=config.pipeline.min_sections,
+        )
+        self._judge: Optional[JudgeLLM] = (
+            JudgeLLM(self._llm, max_tokens=config.judge.max_tokens)
+            if config.judge.enabled
+            else None
         )
         self._log_path: Optional[Path] = None
         self._log_lock = Lock()
@@ -103,12 +108,11 @@ class PipelineOrchestrator:
             "domain": [],
             "output_files": [],
             "retry_count": 0,
-            "keyword_retention_rate": 0.0,
             "tokens_in": _token_count(doc.content),
             "tokens_out": 0,
             "duration_sec": 0.0,
             "error": None,
-            "llm_raw_preview": None,
+            "judge": None,
         }
         self._write_log(log_entry)
 
@@ -124,7 +128,7 @@ class PipelineOrchestrator:
                 return "skip"
 
             if filter_result.confidence < 0.7:
-                print(f"\n[WARN] {doc.source_file} — 분류 신뢰도 낙음: {filter_result.confidence:.2f}")
+                print(f"\n[WARN] {doc.source_file} — 분류 신뢰도 낮음: {filter_result.confidence:.2f}")
 
             working_doc = doc
             if filter_result.is_partial:
@@ -149,18 +153,28 @@ class PipelineOrchestrator:
                         os.unlink(tmp_path)
 
             refined_text = ""
-            validation = None
+            last_verdict: Optional[JudgeVerdict] = None
             max_retries = self._cfg.pipeline.max_retries
 
             for attempt in range(max_retries + 1):
                 log_entry["stage"] = "refine"
+
+                retry_hint: Optional[str] = (
+                    last_verdict.retry_hint
+                    if last_verdict and last_verdict.retry_hint != "none"
+                    else None
+                )
+
                 try:
-                    refined_text = self._refiner.refine_document(working_doc, filter_result.domains)
+                    refined_text = self._refiner.refine_document(
+                        working_doc,
+                        filter_result.domains,
+                        retry_hint=retry_hint,
+                    )
                 except LLMEmptyResponseError as e:
                     print(f"\n[ERROR] {doc.source_file} — LLM 빈 응답: {e}")
-                    log_entry["llm_raw_preview"] = f"EMPTY (attempt={attempt})"
                     if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — LLM 응답 없음, 재시도")
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file}")
                         continue
                     log_entry["status"] = "fail"
                     log_entry["error"] = str(e)
@@ -168,12 +182,9 @@ class PipelineOrchestrator:
                     self._write_log(log_entry)
                     return "fail"
 
-                log_entry["llm_raw_preview"] = refined_text[:200] if refined_text else "(empty)"
-
                 if not refined_text.strip():
-                    print(f"\n[ERROR] {doc.source_file} — refine 결과 빈 문자열")
                     if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — 재시도")
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — refine 결과 빈 문자열")
                         continue
                     log_entry["status"] = "fail"
                     log_entry["error"] = "refine 결과 빈 문자열"
@@ -183,27 +194,58 @@ class PipelineOrchestrator:
 
                 clean_text = strip_thinking(refined_text)
 
-                log_entry["stage"] = "validate"
-                validation = self._validator.validate_strict(doc.content, clean_text)
+                # --- Layer 1: 구조 검증 (룰셋) ---
+                log_entry["stage"] = "structure_validate"
+                struct_result = self._structure_validator.validate(clean_text)
+                if not struct_result.is_valid:
+                    if attempt < max_retries:
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — 구조 오류: {struct_result.errors}")
+                        continue
+                    log_entry["status"] = "fail"
+                    log_entry["error"] = str(struct_result.errors)
+                    log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
+                    self._write_log(log_entry)
+                    return "fail"
+
+                # --- Layer 2: 내용 검증 (Judge LLM) ---
+                if self._judge is not None:
+                    log_entry["stage"] = "judge"
+                    verdict = self._judge.judge(
+                        original_text=doc.content,
+                        refined_text=clean_text,
+                        source_file=doc.source_file,
+                    )
+                    last_verdict = verdict
+                    log_entry["judge"] = {
+                        "passed": verdict.passed,
+                        "faithfulness": verdict.faithfulness,
+                        "completeness": verdict.completeness,
+                        "structure_ok": verdict.structure_ok,
+                        "critique": verdict.critique,
+                        "retry_hint": verdict.retry_hint,
+                        "attempt": attempt,
+                    }
+                    self._write_log(log_entry)
+
+                    if not verdict.passed:
+                        if attempt < max_retries:
+                            print(
+                                f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file}\n"
+                                f"  Judge critique: {verdict.critique}\n"
+                                f"  Retry hint: {verdict.retry_hint}"
+                            )
+                            continue
+                        log_entry["status"] = "fail"
+                        log_entry["error"] = f"Judge 불합격: {verdict.critique}"
+                        log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
+                        self._write_log(log_entry)
+                        return "fail"
+
                 log_entry["retry_count"] = attempt
+                refined_text = clean_text
+                break
 
-                if validation.is_valid:
-                    refined_text = clean_text
-                    break
-
-                if attempt < max_retries:
-                    print(f"\n[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — {validation.errors}")
-
-            log_entry["keyword_retention_rate"] = validation.keyword_retention_rate if validation else 0.0
             log_entry["tokens_out"] = _token_count(refined_text) if refined_text else 0
-
-            if not validation or not validation.is_valid:
-                log_entry["status"] = "fail"
-                log_entry["error"] = str(validation.errors if validation else "unknown")
-                log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
-                self._write_log(log_entry)
-                return "fail"
-
             saved = self._save_output(refined_text, doc.source_file, filter_result.domains)
             log_entry["output_files"] = saved
             log_entry["status"] = "success"
@@ -226,6 +268,8 @@ class PipelineOrchestrator:
         print(f"[INFO] 로그 파일: {self._log_path}")
         if self._cfg.search.enabled:
             print(f"[INFO] 웹 검색 보강 활성화 ({self._cfg.search.base_url})")
+        if self._cfg.judge.enabled:
+            print(f"[INFO] Judge LLM 활성화 (model={self._cfg.model.model_name}, temperature=0.0)")
 
         all_docs = load_all_documents(
             self._cfg.pipeline.input_dir,

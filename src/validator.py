@@ -1,17 +1,17 @@
 # src/validator.py
 import re
-from typing import List, Set
+from typing import List
 
 from src.models import ValidationResult
 
-_VER_PATTERN = re.compile(r"v?\d+\.\d+(?:\.\d+)?")
-_CODE_PATTERN = re.compile(r"`[^`\n\r]{2,30}`")
-_H2_PATTERN = re.compile(r"(?m)^## ")
-_HALLUC_NUM_PATTERN = re.compile(r"\b\d{4,}\b")
-_WEB_REF_PATTERN = re.compile(r"\[웹 참조[^\]]*\]")
-_REFINED_AT_PATTERN = re.compile(r"(?m)^refined_at:\s*(\S+)")
 _THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 _GENERIC_TAG_PATTERN = re.compile(r"<\|[^>]+>", re.DOTALL)
+_H2_PATTERN = re.compile(r"(?m)^## ")
+_FRONTMATTER_OPEN = re.compile(r"^---\s*\n", re.MULTILINE)
+_REQUIRED_FIELDS = [
+    "title:", "domain:", "doc_type:",
+    "keywords:", "summary:", "source_file:", "refined_at:",
+]
 
 
 def strip_thinking(text: str) -> str:
@@ -19,75 +19,35 @@ def strip_thinking(text: str) -> str:
     cleaned = _GENERIC_TAG_PATTERN.sub("", cleaned)
     lines = cleaned.splitlines()
     result: List[str] = []
-    found_fence = False
+    found = False
     for line in lines:
-        if not found_fence and line.strip() in ("", "thought", "model", "user"):
+        if not found and line.strip() in ("", "thought", "model", "user"):
             continue
-        found_fence = True
+        found = True
         result.append(line)
     return "\n".join(result).strip()
 
 
-def _normalize(text: str) -> str:
-    return _WEB_REF_PATTERN.sub("", text)
+class StructureValidator:
+    """
+    YAML front-matter 구조와 필수 필드 존재 여부만 검사한다.
+    내용(content) 품질 판단은 JudgeLLM이 전담한다.
+    """
 
-
-def _extract_pipeline_injected_numbers(refined_text: str) -> Set[str]:
-    injected: Set[str] = set()
-    m = _REFINED_AT_PATTERN.search(refined_text)
-    if m:
-        date_str = m.group(1).strip()
-        for p in re.split(r"[-/]", date_str):
-            if re.fullmatch(r"\d{4,}", p):
-                injected.add(p)
-    return injected
-
-
-def _extract_keywords(text: str) -> Set[str]:
-    normalized = _normalize(text)
-    keywords: Set[str] = set()
-    keywords.update(_VER_PATTERN.findall(normalized))
-    keywords.update(m.group() for m in _CODE_PATTERN.finditer(normalized))
-    return keywords
-
-
-def _has_frontmatter(text: str) -> bool:
-    return text.lstrip().startswith("---")
-
-
-def _check_required_fields(text: str) -> List[str]:
-    missing: List[str] = []
-    required = ["title:", "domain:", "doc_type:", "keywords:", "summary:", "source_file:", "refined_at:"]
-    for field in required:
-        if field not in text:
-            missing.append(field.rstrip(":"))
-    return missing
-
-
-class Validator:
-    def __init__(
-        self,
-        keyword_retention_threshold: float = 0.7,
-        min_doc_length: int = 200,
-        min_sections: int = 1,
-    ):
-        self._threshold = keyword_retention_threshold
+    def __init__(self, min_doc_length: int = 200, min_sections: int = 1):
         self._min_length = min_doc_length
         self._min_sections = min_sections
 
-    def validate(self, original_text: str, refined_text: str) -> ValidationResult:
+    def validate(self, refined_text: str) -> ValidationResult:
         errors: List[str] = []
-        warnings: List[str] = []
-        missing_keywords: List[str] = []
-
         text = strip_thinking(refined_text)
 
-        if not _has_frontmatter(text):
+        if not text.lstrip().startswith("---"):
             errors.append("YAML front-matter 없음")
 
-        missing_fields = _check_required_fields(text)
-        if missing_fields:
-            errors.append(f"필수 필드 누락: {missing_fields}")
+        missing = [f.rstrip(":") for f in _REQUIRED_FIELDS if f not in text]
+        if missing:
+            errors.append(f"필수 필드 누락: {missing}")
 
         body_start = text.find("---", 3)
         body = text[body_start + 3:] if body_start != -1 else text
@@ -98,42 +58,11 @@ class Validator:
         if h2_count < self._min_sections:
             errors.append(f"H2 섹션 부족: {h2_count}개 (최소 {self._min_sections}개)")
 
-        original_keywords = _extract_keywords(original_text)
-        if original_keywords:
-            refined_normalized = _normalize(text)
-            retained_kws = {kw for kw in original_keywords if kw in refined_normalized}
-            missing_kws = original_keywords - retained_kws
-            rate = len(retained_kws) / len(original_keywords)
-            if rate < self._threshold:
-                missing_keywords = sorted(missing_kws)
-                errors.append(
-                    f"키워드 보존율 미달: {rate:.2%} (기준 {self._threshold:.0%}) "
-                    f"| 누락: {missing_keywords}"
-                )
-        else:
-            rate = 1.0
-
-        orig_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(original_text)))
-        pipeline_injected = _extract_pipeline_injected_numbers(text)
-        orig_nums.update(pipeline_injected)
-        refined_nums = set(_HALLUC_NUM_PATTERN.findall(_normalize(text)))
-        halluc_candidates = refined_nums - orig_nums
-        if halluc_candidates:
-            warnings.append(f"[경고] 원문에 없는 숫자 출현 (환각 의심): {sorted(halluc_candidates)}")
-
         return ValidationResult(
             is_valid=len(errors) == 0,
-            keyword_retention_rate=rate,
-            errors=errors + warnings,
-            missing_keywords=missing_keywords,
+            keyword_retention_rate=1.0,
+            errors=errors,
         )
 
-    def validate_strict(self, original_text: str, refined_text: str) -> ValidationResult:
-        result = self.validate(original_text, refined_text)
-        blocking = [e for e in result.errors if "경고" not in e]
-        return ValidationResult(
-            is_valid=len(blocking) == 0,
-            keyword_retention_rate=result.keyword_retention_rate,
-            errors=result.errors,
-            missing_keywords=result.missing_keywords,
-        )
+
+Validator = StructureValidator
