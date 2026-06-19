@@ -3,26 +3,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from src.llm_utils import extract_json_object, strip_llm_noise
+from src.llm_utils import extract_last_json_object, strip_llm_noise
 from src.models import JudgeVerdict
 from src.ports import LLMClientPort
 
-# ---------------------------------------------------------------------------
-# Public exception — callers must handle or propagate
-# ---------------------------------------------------------------------------
-
 
 class JudgeError(RuntimeError):
-    """판정 LLM 호출 실패 또는 응답 파싱 실패 시 발생한다.
+    pass
 
-    Silent False-positive(판정 실패를 passed=True로 묵인)를 대신하여
-    호출측(pipeline_runner.py)에서 명시적 정책을 채택하게 한다.
-    """
-
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
 
 _JUDGE_SYSTEM = """You are a brutally critical technical document reviewer.
 Your sole purpose is to find flaws in a refined internal document.
@@ -69,14 +57,9 @@ _USER_TEMPLATE = """[ORIGINAL SOURCE DOCUMENT]
 Apply all evaluation criteria strictly. Output JSON only."""
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
 def _parse_verdict(raw: str) -> Optional[JudgeVerdict]:
     cleaned = strip_llm_noise(raw)
-    data = extract_json_object(cleaned)
+    data = extract_last_json_object(cleaned)
     if data is None:
         return None
     try:
@@ -92,22 +75,10 @@ def _parse_verdict(raw: str) -> Optional[JudgeVerdict]:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Public class
-# ---------------------------------------------------------------------------
-
-
 class JudgeLLM:
-    """LLM 기반 정제 문서 판정기.
-
-    호출 실패 또는 JSON 파싱 실패 시 ``JudgeError`` 예외를 발생한다.
-    파이프라인에서 *skip* 할지 *fail* 시킬지는 호출측이 결정한다.
-    """
-
     def __init__(self, llm: LLMClientPort, max_tokens: int = 1024, judge_input_chars: int = 6000):
         self._llm = llm
         self._max_tokens = max_tokens
-        # BUG-C FIX: 하드코딩 6000 → 생성자 주입으로 설정값 외부화
         self._judge_input_chars = judge_input_chars
 
     def judge(
@@ -116,7 +87,6 @@ class JudgeLLM:
         refined_text: str,
         source_file: str = "",
     ) -> JudgeVerdict:
-        """Raise JudgeError if the LLM call or response parsing fails."""
         limit = self._judge_input_chars
         user_prompt = _USER_TEMPLATE.format(
             original=original_text[:limit],
@@ -130,14 +100,11 @@ class JudgeLLM:
                 max_tokens=self._max_tokens,
             )
         except Exception as exc:
-            raise JudgeError(
-                f"Judge LLM 호출 실패 ({source_file}): {exc}"
-            ) from exc
+            raise JudgeError(f"Judge LLM \ud638\ucd9c \uc2e4\ud328 ({source_file}): {exc}") from exc
 
         verdict = _parse_verdict(raw)
         if verdict is None:
             raise JudgeError(
-                f"Judge JSON 파싱 실패 ({source_file}), raw={raw[:200]!r}"
+                f"Judge JSON \ud30c\uc2f1 \uc2e4\ud328 ({source_file}), raw={raw[:200]!r}"
             )
-
         return verdict

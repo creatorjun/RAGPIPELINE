@@ -1,12 +1,4 @@
 # src/pipeline_runner.py
-"""
-단일 문서 실행 로직.
-
-PipelineOrchestrator.run() 에 들어있던 _process_document() 실행을
-독립적으로 테스트 가능한 클래스로 분리한다.
-
-SRP 역할: 하나의 Document 를 받아 정제 → 판정 → 저장 파이프라인을 실행.
-"""
 from __future__ import annotations
 
 import os
@@ -38,20 +30,6 @@ except ImportError:
 
 
 class DocumentRunner:
-    """단일 ``Document`` 실행을 담당한다.
-
-    Args:
-        cfg:                  애플리케이션 설정
-        io:                   I/O 헬퍼 (dir init, log, save)
-        domain_filter:        도메인 분류기
-        refiner:              문서 정제기
-        structure_validator:  YAML front-matter / 섹션 구조 검증기
-        judge:                LLM 판정기 (선택 사항)
-        on_judge_error:       JudgeError 발생 시 정책.
-                              ``"skip"`` → 판정 실패를 무시하고 성공 처리
-                              ``"fail"`` → 판정 실패를 실패로 처리 (default)
-    """
-
     def __init__(
         self,
         cfg: AppConfig,
@@ -72,12 +50,7 @@ class DocumentRunner:
             raise ValueError("on_judge_error must be 'skip' or 'fail'")
         self._on_judge_error = on_judge_error
 
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
-
     def run(self, doc: Document) -> str:
-        """단일 문서를 실행하고 ``"success"`` / ``"skip"`` / ``"fail"`` 중 하나를 반환한다."""
         start = datetime.now(tz=timezone.utc)
         log_entry: dict = {
             "timestamp": start.isoformat(),
@@ -107,12 +80,7 @@ class DocumentRunner:
             print(f"\n[ERROR] {doc.source_file} \u2014 {exc}")
             return "fail"
 
-    # ------------------------------------------------------------------
-    # Internal pipeline
-    # ------------------------------------------------------------------
-
     def _execute(self, doc: Document, log: dict, start: datetime) -> str:
-        # ---- domain filter ----------------------------------------
         log["stage"] = "domain_filter"
         filter_result = self._filter.classify(doc)
         log["domain"] = filter_result.domains
@@ -126,17 +94,14 @@ class DocumentRunner:
             return "skip"
 
         if filter_result.confidence < 0.7:
-            print(f"\n[WARN] {doc.source_file} \u2014 분류 신뢰도 낮음: {filter_result.confidence:.2f}")
+            print(f"\n[WARN] {doc.source_file} \u2014 \ubd84\ub958 \uc2e0\ub8b0\ub3c4 \ub099\uc74c: {filter_result.confidence:.2f}")
 
-        # ---- partial-document extraction --------------------------
         working_doc = self._maybe_extract(doc, filter_result, log)
 
-        # DESIGN-C FIX: refine → validate → judge 루프를 별도 메서드로 분리
         result, refined_text = self._run_refine_loop(doc, working_doc, filter_result, log, start)
         if result != "success":
             return result
 
-        # ---- save -------------------------------------------------
         log["tokens_out"] = _token_count(refined_text) if refined_text else 0
         saved = self._io.save_output(refined_text, doc.source_file, filter_result.domains)
         log.update(output_files=saved, status="success", stage="done")
@@ -152,15 +117,10 @@ class DocumentRunner:
         log: dict,
         start: datetime,
     ) -> tuple[str, str]:
-        """refine → validate → judge 루프를 실행한다.
-
-        Returns:
-            (status, refined_text) 튜플.
-            status 는 ``"success"`` / ``"fail"`` 중 하나.
-        """
         refined_text = ""
         last_verdict: Optional[JudgeVerdict] = None
         max_retries = self._cfg.pipeline.max_retries
+        structure_failed = False
 
         for attempt in range(max_retries + 1):
             retry_hint: Optional[str] = (
@@ -169,17 +129,17 @@ class DocumentRunner:
                 else None
             )
 
-            # -- refine ---------------------------------------------
             log["stage"] = "refine"
             try:
                 refined_text = self._refiner.refine_document(
                     working_doc,
                     filter_result.domains,
                     retry_hint=retry_hint,
+                    structure_failed=structure_failed,
                 )
             except LLMEmptyResponseError as exc:
                 if attempt < max_retries:
-                    print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 LLM 빈 응답")
+                    print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 LLM \ube48 \uc751\ub2f5")
                     continue
                 log.update(
                     status="fail",
@@ -191,11 +151,12 @@ class DocumentRunner:
 
             if not refined_text.strip():
                 if attempt < max_retries:
-                    print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 refine 결과 빈 문자열")
+                    print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 refine \uacb0\uacfc \ube48 \ubb38\uc790\uc5f4")
+                    structure_failed = True
                     continue
                 log.update(
                     status="fail",
-                    error="refine 결과 빈 문자열",
+                    error="refine \uacb0\uacfc \ube48 \ubb38\uc790\uc5f4",
                     duration_sec=(datetime.now(tz=timezone.utc) - start).total_seconds(),
                 )
                 self._io.write_log(log)
@@ -203,12 +164,12 @@ class DocumentRunner:
 
             clean_text = strip_thinking(refined_text)
 
-            # -- structure validate ---------------------------------
             log["stage"] = "structure_validate"
             struct_result = self._validator.validate(clean_text)
             if not struct_result.is_valid:
                 if attempt < max_retries:
-                    print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 구조 오류: {struct_result.errors}")
+                    print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 \uad6c\uc870 \uc624\ub958: {struct_result.errors}")
+                    structure_failed = True
                     continue
                 log.update(
                     status="fail",
@@ -218,7 +179,8 @@ class DocumentRunner:
                 self._io.write_log(log)
                 return "fail", ""
 
-            # -- judge ----------------------------------------------
+            structure_failed = False
+
             if self._judge is not None:
                 judge_result, last_verdict = self._run_judge(
                     doc, clean_text, log, start, attempt, max_retries, last_verdict
@@ -234,10 +196,6 @@ class DocumentRunner:
 
         return "success", refined_text
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def _run_judge(
         self,
         doc: Document,
@@ -248,15 +206,6 @@ class DocumentRunner:
         max_retries: int,
         last_verdict: Optional[JudgeVerdict],
     ) -> tuple[str, Optional[JudgeVerdict]]:
-        """Judge 를 실행하고 (result_str, verdict) 튜플을 반환한다.
-
-        result_str 은 ``"ok"`` / ``"retry"`` / ``"fail"`` 중 하나.
-        verdict 는 성공 시 JudgeVerdict, 실패/skip 시 이전 verdict 그대로.
-
-        JudgeError 시 ``on_judge_error`` 정책에 따라:
-          - ``"skip"`` → ``("ok", last_verdict)``
-          - ``"fail"`` → ``("fail", last_verdict)``
-        """
         log["stage"] = "judge"
         assert self._judge is not None
 
@@ -269,7 +218,7 @@ class DocumentRunner:
         except JudgeError as exc:
             print(f"[JUDGE ERROR] {doc.source_file}: {exc}")
             if self._on_judge_error == "skip":
-                print("[JUDGE] on_judge_error=skip \u2014 판정 건너뜀.")
+                print("[JUDGE] on_judge_error=skip \u2014 \ud310\uc815 \uac74\ub108\ub700.")
                 return "ok", last_verdict
             log.update(
                 status="fail",
@@ -300,7 +249,7 @@ class DocumentRunner:
                 return "retry", verdict
             log.update(
                 status="fail",
-                error=f"Judge 불합격: {verdict.critique}",
+                error=f"Judge \ubd88\ud569\uaca9: {verdict.critique}",
                 duration_sec=(datetime.now(tz=timezone.utc) - start).total_seconds(),
             )
             self._io.write_log(log)
@@ -314,14 +263,13 @@ class DocumentRunner:
         filter_result: FilterResult,
         log: dict,
     ) -> Document:
-        """is_partial 시 도메인 관련 섹션만 추출한 Document 를 반환, 실패 시 원본 반환."""
         if not filter_result.is_partial:
             return doc
 
         log["stage"] = "extract"
         extracted = self._refiner.extract_domain_sections(doc, filter_result.domains)
         if not extracted:
-            print(f"\n[WARN] {doc.source_file} \u2014 섹션 추출 결과 없음, 원본으로 폴백")
+            print(f"\n[WARN] {doc.source_file} \u2014 \uc139\uc158 \ucd94\ucd9c \uacb0\uacfc \uc5c6\uc74c, \uc6d0\ubcf8\uc73c\ub85c \ud3f4\ubc31")
             return doc
 
         tmp_path: Optional[str] = None
@@ -339,7 +287,7 @@ class DocumentRunner:
             working.source_file = doc.source_file
             return working
         except Exception as exc:
-            print(f"\n[WARN] {doc.source_file} \u2014 임시 파일 로드 실패, 원본으로 폴백: {exc}")
+            print(f"\n[WARN] {doc.source_file} \u2014 \uc784\uc2dc \ud30c\uc77c \ub85c\ub4dc \uc2e4\ud328, \uc6d0\ubcf8\uc73c\ub85c \ud3f4\ubc31: {exc}")
             return doc
         finally:
             if tmp_path:

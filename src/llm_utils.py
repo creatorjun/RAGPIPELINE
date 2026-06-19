@@ -52,7 +52,15 @@ def strip_web_ref_tags(text: str) -> str:
     return _WEB_REF_TAG_PATTERN.sub("", text)
 
 
+def _try_parse_json(text: str, start: int, end: int) -> Optional[dict]:
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
 def extract_json_object(text: str) -> Optional[dict]:
+    """텍스트에서 첫 번째 완전한 JSON 객체를 추출한다."""
     start = text.find("{")
     if start == -1:
         return None
@@ -63,8 +71,36 @@ def extract_json_object(text: str) -> Optional[dict]:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                try:
-                    return json.loads(text[start: i + 1])
-                except json.JSONDecodeError:
-                    return None
+                return _try_parse_json(text, start, i)
     return None
+
+
+def extract_last_json_object(text: str) -> Optional[dict]:
+    """텍스트에서 마지막 완전한 JSON 객체를 추출한다.
+
+    Gemma4 reasoning 모드에서 모델이 프롬프트 내 JSON 스키마를 복창(echo)한 뒤
+    실제 응답 JSON을 뒤에 붙이는 패턴에 대응하기 위해 마지막 객체를 선택한다.
+    """
+    last_result: Optional[dict] = None
+    search_from = 0
+    while True:
+        start = text.find("{", search_from)
+        if start == -1:
+            break
+        depth = 0
+        end = -1
+        for i, ch in enumerate(text[start:], start=start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            break
+        parsed = _try_parse_json(text, start, end)
+        if parsed is not None:
+            last_result = parsed
+        search_from = end + 1
+    return last_result
