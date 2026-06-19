@@ -5,7 +5,7 @@ Phase 1·2 정제 파이프라인 진입점.
 
 플랫폼 자동 감지::
 
-    macOS (Apple Silicon) → mlx-community/gemma-4-26b-a4b-it-4bit + mlx_lm
+    macOS (Apple Silicon) → mlx-community/gemma-4-26b-a4b-it-4bit + mlx_vllm
     x64  (Linux / Windows) → google/gemma-4-E2B-it-assistant       + vllm
 
 실행 흐름:
@@ -20,7 +20,7 @@ CLI 예시::
     # 자동 감지 (플랫폼에 따라 모델·백엔드 선택)
     python run.py
 
-    # 테스트 모드 — 경량 모델(E2B) + 플랫폼 적합 백엔드, 포트 8001
+    # 테스트 모드 — 경량 모델(E2B) + config.yaml 백엔드, 포트 8001
     python run.py --test
 
     # 백엔드 치환 (CLI 우선)
@@ -67,7 +67,7 @@ class PlatformPreset:
 
 MACOS_PRESET = PlatformPreset(
     model_path="mlx-community/gemma-4-26b-a4b-it-4bit",
-    backend="mlx_lm",
+    backend="mlx_vllm",         # gemma-4 아키텍처 지원 백엔드
     description="macOS (Apple Silicon)",
     test_model_path="mlx-community/gemma-4-e2b-it-4bit",
 )
@@ -93,8 +93,9 @@ def _platform_preset() -> PlatformPreset:
 class TestPreset:
     """--test 플래그 적용 시 사용할 고정 값.
 
-    모델 / 백엔드는 PlatformPreset.test_model_path 에서 자동 선택되므로
+    모델은 PlatformPreset.test_model_path 에서 자동 선택되밀로
     이 클래스에는 포트 관련 고정값만 담는다.
+    백엔드는 config.yaml 값을 우선하여 추후 --backend CLI로 치환 가능하다.
     """
     port: int = 8001
     max_tokens: int = 2048
@@ -124,7 +125,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             f"\ud14c\uc2a4\ud2b8 \ubaa8\ub4dc: \uacbd\ub7c9 E2B \ubaa8\ub378\uc744 \ud3ec\ud2b8 {TEST_PRESET.port} "
-            "\uc73c\ub85c \uae30\ub3d9 (\ud50c\ub7ab\ud3fc\uc5d0 \ub530\ub77c \ubaa8\ub378\u00b7\ubc31\uc5d4\ub4dc \uc790\ub3d9 \uc120\ud0dd)"
+            "\uc73c\ub85c \uae30\ub3d9 (\ubc31\uc5d4\ub4dc\ub294 config.yaml \ub610\ub294 --backend \uc73c\ub85c \uc9c0\uc815)"
         ),
     )
     parser.add_argument(
@@ -141,7 +142,7 @@ def _parse_args() -> argparse.Namespace:
         "--backend",
         choices=["mlx_lm", "mlx_vllm", "vllm"],
         default=None,
-        help="서버 백엔드 치환 (자동 감지보다 우선)",
+        help="서버 백엔드 치환 (config.yaml / 자동 감지보다 우선)",
     )
     parser.add_argument(
         "--no-server",
@@ -156,30 +157,30 @@ def _parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def _apply_platform_preset(cfg: AppConfig, preset: PlatformPreset) -> None:
-    """플랫폼에 적합한 모델·백엔드를 cfg 에 적용한다.
+    """config.yaml에 model_path / backend가 없으면 플랫폼 프리셋을 기본값으로 적용.
 
-    config.yaml 에 model_path / backend 설정이 없으면
-    플랫폼 프리셋을 기본값으로 이용한다.
-    config.yaml 에 명시된 경우는 config가 우선된다.
+    config.yaml에 명시된 설정은 고정되지 않는다.
     """
     if not cfg.server.model_path:
         cfg.server.model_path = preset.model_path
         cfg.model.model_name = preset.model_path
-    if cfg.server.backend == "mlx_lm" and preset.backend != "mlx_lm":
-        cfg.server.backend = preset.backend
+    # config.yaml backend가 플랫폼 프리셋과 다른 경우는 config.yaml을 존중한다
 
 
 def _apply_test_preset(cfg: AppConfig, preset: TestPreset, platform_preset: PlatformPreset) -> None:
-    """테스트 프리셋 값을 cfg 에 적용한다.
+    """--test 모드: 경량 E2B 모델 + 포트만 고정, 백엔드는 config.yaml 값 유지.
 
-    모델은 PlatformPreset.test_model_path 에서 가져온다.
-      - macOS : mlx-community/gemma-4-e2b-it-4bit  (MLX 양자화본)
-      - x64   : google/gemma-4-E2B-it-assistant    (vllm)
+    백엔드 우선순위:
+        1. --backend CLI 인수 (이후 main()에서 덮어쓸)
+        2. config.yaml 에 명시된 backend (cfg.server.backend)
+        3. PlatformPreset.backend (주시: 모델 로드 능력에 따라)
     """
     test_model = platform_preset.test_model_path
     cfg.server.model_path = test_model
     cfg.model.model_name = test_model
-    cfg.server.backend = platform_preset.backend
+    # 백엔드는 config.yaml이 명시된 경우 그대로 유지; 미설정이면 플랫폼 프리셋 사용
+    if not cfg.server.backend:
+        cfg.server.backend = platform_preset.backend
     cfg.server.port = preset.port
     cfg.server.managed = True
     cfg.server.startup_timeout = preset.startup_timeout
@@ -204,7 +205,7 @@ def main() -> int:
     # 1) 플랫폼 기본값 적용 (config.yaml 명시 설정이 없으면)
     _apply_platform_preset(cfg, platform_preset)
 
-    # 2) 테스트 모드 적용 (플랫폼 감지보다 우선)
+    # 2) 테스트 모드 적용 — 백엔드는 config.yaml을 유지
     if args.test:
         _apply_test_preset(cfg, TEST_PRESET, platform_preset)
         print(
