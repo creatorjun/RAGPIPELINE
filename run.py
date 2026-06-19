@@ -5,8 +5,14 @@ Phase 1·2 정제 파이프라인 진입점.
 
 플랫폼 자동 감지::
 
-    macOS (Apple Silicon) → mlx-community/gemma-4-26b-a4b-it-4bit + mlx_vllm
+    macOS (Apple Silicon) → mlx-community/gemma-4-26b-a4b-it-4bit + mlx_lm
     x64  (Linux / Windows) → google/gemma-4-E2B-it-assistant       + vllm
+
+백엔드 선택 기준::
+
+    mlx_lm   — 텍스트 전용 Gemma-4 모델 (gemma-4-*-it-*bit)
+    mlx_vllm — 비전+텍스트 겸용 VLM (mlx-vlm 패키지 필요)
+    vllm     — x64 CUDA / ROCm 환경
 
 실행 흐름:
     1. config.yaml 로드
@@ -67,7 +73,9 @@ class PlatformPreset:
 
 MACOS_PRESET = PlatformPreset(
     model_path="mlx-community/gemma-4-26b-a4b-it-4bit",
-    backend="mlx_vllm",         # gemma-4 아키텍처 지원 백엔드
+    # Gemma-4 는 텍스트 전용 모델 → mlx_lm 사용
+    # mlx_vllm(mlx-vlm) 은 VLM(비전+텍스트) 전용이라 가중치 구조 불일치 발생
+    backend="mlx_lm",
     description="macOS (Apple Silicon)",
     test_model_path="mlx-community/gemma-4-e2b-it-4bit",
 )
@@ -93,7 +101,7 @@ def _platform_preset() -> PlatformPreset:
 class TestPreset:
     """--test 플래그 적용 시 사용할 고정 값.
 
-    모델은 PlatformPreset.test_model_path 에서 자동 선택되밀로
+    모델은 PlatformPreset.test_model_path 에서 자동 선택되므로
     이 클래스에는 포트 관련 고정값만 담는다.
     백엔드는 config.yaml 값을 우선하여 추후 --backend CLI로 치환 가능하다.
     """
@@ -173,7 +181,7 @@ def _apply_test_preset(cfg: AppConfig, preset: TestPreset, platform_preset: Plat
     백엔드 우선순위:
         1. --backend CLI 인수 (이후 main()에서 덮어쓸)
         2. config.yaml 에 명시된 backend (cfg.server.backend)
-        3. PlatformPreset.backend (주시: 모델 로드 능력에 따라)
+        3. PlatformPreset.backend
     """
     test_model = platform_preset.test_model_path
     cfg.server.model_path = test_model

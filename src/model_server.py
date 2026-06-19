@@ -4,17 +4,20 @@ LLM 서버 자동 기동 / 헬스체크 / 종료 모듈.
 
 지원 백엔드::
 
-    mlx_lm   — Apple Silicon 전용. python -m mlx_lm server
-               health: GET /health  (200 OK)
+    mlx_lm   — Apple Silicon 전용 (텍스트 모델).
+               엔트리포인트: python -m mlx_lm server
                base_url: http://host:port/v1
+               health:   GET /health → 200 OK
 
-    mlx_vllm — mlx-vlm 패키지. mlx_vlm.server
-               health: GET /health  (200 OK, mlx-vlm 0.5+ 지원)
-               base_url: http://host:port  (/v1 없음)
-
-    vllm     — x64 (CUDA / ROCm). python -m vllm.entrypoints.openai.api_server
-               health: GET /health  (200 OK)
+    mlx_vllm — mlx-vlm 패키지 (VLM, 비전+텍스트 겸용).
+               엔트리포인트: python -m mlx_vlm.server
                base_url: http://host:port/v1
+               health:   GET /health → 200 OK (없으면 /chat/completions 폴백)
+
+    vllm     — x64 CUDA / ROCm 환경.
+               엔트리포인트: python -m vllm.entrypoints.openai.api_server
+               base_url: http://host:port/v1
+               health:   GET /health → 200 OK
 
 사용 방식::
 
@@ -53,11 +56,6 @@ from src.config import AppConfig, ServerConfig
 # Helper
 # ---------------------------------------------------------------------------
 
-def _health_url(host: str, port: int, backend: str) -> str:
-    """backend 에 따라 /health 엔드포인트 URL 을 반환한다."""
-    return f"http://{host}:{port}/health"
-
-
 def _is_port_bound(host: str, port: int) -> bool:
     """TCP 소켓 연결로 포트 점유 여부를 확인한다."""
     import socket
@@ -83,7 +81,7 @@ class ModelServer:
     """mlx_lm / mlx_vllm(mlx-vlm) / vllm 서버를 하위 프로세스로 기동한다.
 
     Args:
-        model_path:            HuggingFace repo ID 또는 로컈 디렉터리
+        model_path:            HuggingFace repo ID 또는 로컬 디렉터리
         host:                  리스닝 호스트 (기본 0.0.0.0)
         port:                  리스닝 포트 (기본 8000)
         backend:               ``"mlx_lm"``, ``"mlx_vllm"``, 또는 ``"vllm"``
@@ -236,9 +234,8 @@ class ModelServer:
             # mlx-vlm 은 /health 대신 /chat/completions 엔드포인트를 제공
             if self._backend == "mlx_vllm":
                 try:
-                    # OPTIONS 또는 GET 요청으로 엔드포인트 존재 확인
                     r2 = requests.get(fallback_url, timeout=2)
-                    # 404/405/422 등 HTTP 에러도 서버가 떴 있다는 신호
+                    # 4xx 도 서버가 떠 있다는 신호
                     if r2.status_code in (200, 404, 405, 422):
                         print("[ModelServer] 서버 준비 완료 (mlx-vlm).", flush=True)
                         return
@@ -276,12 +273,12 @@ class ModelServer:
     def base_url(self) -> str:
         """LLMClient 에 주입할 OpenAI-compatible base URL.
 
-        mlx_vllm(mlx-vlm): base URL 에 /v1 접미사 없음
-        mlx_lm / vllm    : /v1 있음
+        세 백엔드 모두 /v1 접두사를 사용한다:
+        - mlx_lm:   http://host:port/v1
+        - mlx_vllm: http://host:port/v1  (mlx-vlm 0.5+ 기준)
+        - vllm:     http://host:port/v1
         """
         host = "127.0.0.1" if self._host == "0.0.0.0" else self._host
-        if self._backend == "mlx_vllm":
-            return f"http://{host}:{self._port}"
         return f"http://{host}:{self._port}/v1"
 
     # ------------------------------------------------------------------
@@ -299,7 +296,7 @@ class ModelServer:
             return self._build_mlx_lm_cmd(python)
 
     def _build_mlx_lm_cmd(self, python: str) -> list[str]:
-        """mlx_lm server CLI (Apple Silicon 전용)
+        """mlx_lm server CLI (Apple Silicon 텍스트 모델 전용)
 
         Example::
 
@@ -320,16 +317,15 @@ class ModelServer:
         return cmd
 
     def _build_mlx_vlm_cmd(self, python: str) -> list[str]:
-        """mlx-vlm 서버 CLI (Apple Silicon 전용)
+        """mlx-vlm 서버 CLI (Apple Silicon VLM 전용)
 
-        mlx-vlm 이 제공하는 OpenAI-compatible 서버.
-        엔트리포인트: mlx_vlm.server
-        기본 포트: 8080 (config 로 원하는 포트로 변경 가능)
+        비전+텍스트 겸용 모델(VLM)에 사용한다.
+        텍스트 전용 Gemma-4 모델은 mlx_lm 백엔드를 사용해야 한다.
 
         Example::
 
             python -m mlx_vlm.server \\
-                --model mlx-community/gemma-4-e2b-it-4bit \\
+                --model mlx-community/Qwen2-VL-7B-Instruct-4bit \\
                 --host 0.0.0.0 --port 8001
         """
         cmd = [
