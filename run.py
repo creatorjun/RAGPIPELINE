@@ -3,56 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import platform
 import sys
-from dataclasses import dataclass
-from typing import Optional
+
+import requests
 
 from src.config import AppConfig
-from src.model_server import ModelServer, ModelServerError
 from src.pipeline import PipelineOrchestrator
-
-
-def _is_macos() -> bool:
-    return platform.system() == "Darwin"
-
-
-@dataclass(frozen=True)
-class PlatformPreset:
-    model_path: str
-    backend: str
-    description: str
-    test_model_path: str
-
-
-MACOS_PRESET = PlatformPreset(
-    model_path="mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit",
-    backend="vllm_mlx",
-    description="macOS (Apple Silicon)",
-    test_model_path="mlx-community/gemma-4-e2b-it-4bit",
-)
-
-X64_PRESET = PlatformPreset(
-    model_path="google/gemma-4-E2B-it-assistant",
-    backend="vllm",
-    description="x64 (Linux/Windows CUDA)",
-    test_model_path="google/gemma-4-E2B-it-assistant",
-)
-
-
-def _platform_preset() -> PlatformPreset:
-    return MACOS_PRESET if _is_macos() else X64_PRESET
-
-
-@dataclass(frozen=True)
-class TestPreset:
-    port: int = 8001
-    max_tokens: int = 2048
-    startup_timeout: int = 300
-    llm_log_enabled: bool = True
-
-
-TEST_PRESET = TestPreset()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -61,82 +17,49 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--config", default="config.yaml", help="설정 파일 경로")
-    parser.add_argument(
-        "--test",
-        action="store_true",
-        help=(
-            f"\ud14c\uc2a4\ud2b8 \ubaa8\ub4dc: \uacbd\ub7c9 E2B \ubaa8\ub378\uc744 \ud3ec\ud2b8 {TEST_PRESET.port} "
-            "\uc73c\ub85c \uae30\ub3d9 (\ubc31\uc5d4\ub4dc\ub294 config.yaml \ub610\ub294 --backend \uc73c\ub85c \uc9c0\uc815)"
-        ),
-    )
     parser.add_argument("--no-resume", action="store_true", help="Resume 무시 후 전체 재처리")
     parser.add_argument("--dry-run", action="store_true", help="LLM 호출 없이 대상 목록만 출력")
-    parser.add_argument(
-        "--backend",
-        choices=["mlx_lm", "mlx_vllm", "vllm_mlx", "vllm"],
-        default=None,
-        help="서버 백엔드 치환 (config.yaml / 자동 감지보다 우선)",
-    )
-    parser.add_argument("--no-server", action="store_true", help="서버 자동 기동 스킵")
     return parser.parse_args()
 
 
-def _apply_platform_preset(cfg: AppConfig, preset: PlatformPreset) -> None:
-    if not cfg.server.model_path:
-        cfg.server.model_path = preset.model_path
-        cfg.model.model_name = preset.model_path
-
-
-def _apply_test_preset(cfg: AppConfig, preset: TestPreset, platform_preset: PlatformPreset) -> None:
-    test_model = platform_preset.test_model_path
-    cfg.server.model_path = test_model
-    cfg.model.model_name = test_model
-    if not cfg.server.backend:
-        cfg.server.backend = platform_preset.backend
-    cfg.server.port = preset.port
-    cfg.server.managed = True
-    cfg.server.startup_timeout = preset.startup_timeout
-    cfg.model.max_tokens = preset.max_tokens
-    cfg.logging.llm_log_enabled = preset.llm_log_enabled
+def _check_server(base_url: str, api_key: str) -> None:
+    health_url = base_url.rstrip("/").replace("/v1", "") + "/health"
+    try:
+        r = requests.get(health_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=5)
+        if r.status_code == 200:
+            print(f"[run] LLM 서버 연결 확인: {health_url}")
+            return
+        print(f"[run] WARNING: /health 응답 {r.status_code} — 계속 진행합니다.")
+    except requests.exceptions.ConnectionError:
+        print(
+            f"\n[FATAL] LLM 서버에 연결할 수 없습니다: {health_url}\n"
+            "  서버가 실행 중인지 확인하세요.\n"
+            "  예) vllm serve <model> --host 0.0.0.0 --port 8000 --api-key sk-no-key-required",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except requests.exceptions.Timeout:
+        print(f"[run] WARNING: /health 응답 타임아웃 — 계속 진행합니다.")
 
 
 def main() -> int:
     args = _parse_args()
     cfg = AppConfig.from_yaml(args.config)
-    platform_preset = _platform_preset()
 
-    print(
-        f"[run] 플랫폼: {platform_preset.description}  "
-        f"(model={platform_preset.model_path}, backend={platform_preset.backend})"
-    )
+    base_url = cfg.model.base_url
+    api_key = cfg.model.api_key
 
-    _apply_platform_preset(cfg, platform_preset)
+    print(f"[run] LLM 엔드포인트: {base_url}")
+    print(f"[run] 모델: {cfg.model.model_name}")
 
-    if args.test:
-        _apply_test_preset(cfg, TEST_PRESET, platform_preset)
-        print(
-            f"[run] 테스트 모드: model={cfg.server.model_path}  "
-            f"backend={cfg.server.backend}  port={cfg.server.port}"
-        )
-
-    if args.no_server:
-        cfg.server.managed = False
-    if args.backend:
-        cfg.server.backend = args.backend
-
-    server = ModelServer.from_config(cfg)
+    _check_server(base_url, api_key)
 
     try:
-        with server:
-            cfg.model.base_url = server.base_url
-            orchestrator = PipelineOrchestrator(cfg)
-            orchestrator.run(
-                resume=not args.no_resume,
-                dry_run=args.dry_run,
-            )
-    except ModelServerError as e:
-        print(f"\n[FATAL] {e}", file=sys.stderr)
-        return 1
+        orchestrator = PipelineOrchestrator(cfg)
+        orchestrator.run(
+            resume=not args.no_resume,
+            dry_run=args.dry_run,
+        )
     except KeyboardInterrupt:
         print("\n[INFO] 사용자 중단 (Ctrl+C)", file=sys.stderr)
         return 130

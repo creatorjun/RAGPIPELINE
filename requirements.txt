@@ -1,12 +1,10 @@
 # requirements.txt
 
-# --- LLM 서버 (vllm-metal: Apple Silicon Metal GPU 기반 추론) ---
-# 설치: curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
-# 위 인스톨러가 vllm 및 Metal 플러그인을 함께 설치하므로 아래 항목은 참고용
-vllm>=0.9.0
-
 # --- OpenAI-compatible 클라이언트 ---
 openai>=1.30.0
+
+# --- 헬스찻 요청 ---
+requests>=2.31.0
 
 # --- 임베딩 / Re-ranking ---
 FlagEmbedding>=1.2.0
@@ -21,8 +19,5 @@ rank-bm25>=0.2.2
 pydantic>=2.0.0
 PyYAML>=6.0
 
-# --- 헬스챗 요청 ---
-requests>=2.31.0
-
-# --- 선택: 정확한 토큰 카운팅 ---
+# --- 토큰 카운팅 ---
 tiktoken>=0.7.0

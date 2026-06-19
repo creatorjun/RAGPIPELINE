@@ -8,18 +8,6 @@ model:
   temperature: 0.1
   top_p: 0.9
 
-server:
-  managed: true
-  model_path: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
-  host: 0.0.0.0
-  port: 8000
-  backend: vllm_metal
-  api_key: sk-no-key-required
-  reasoning_parser: gemma3
-  trust_remote_code: false
-  extra_args: []
-  startup_timeout: 300
-
 logging:
   llm_log_enabled: true
 
