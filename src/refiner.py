@@ -93,25 +93,22 @@ _KEYWORDS_FIELD_PATTERN = re.compile(
 _FRONTMATTER_PATTERN = re.compile(r'^---\s*\n.*?\n---\s*\n', re.DOTALL)
 _H1_PATTERN = re.compile(r'(?m)^# .+$')
 
+_YAML_FRONTMATTER_START = re.compile(
+    r'(?m)^---[ \t]*\r?\n(?=[ \t]*title[ \t]*:)',
+)
+
 
 def _strip_thinking_preamble(text: str) -> str:
+    m = _YAML_FRONTMATTER_START.search(text)
+    if m:
+        return text[m.start():]
     idx = text.find('---')
     if idx == -1:
         return text
-    candidate = text[idx:]
-    if candidate.startswith('---\n') or candidate.startswith('---\r\n'):
-        return candidate
-    next_idx = text.find('---', idx + 3)
-    if next_idx != -1:
-        candidate2 = text[next_idx:]
-        if candidate2.startswith('---\n') or candidate2.startswith('---\r\n'):
-            return candidate2
-    return candidate
+    return text[idx:]
 
 
 def _parse_llm_output(raw: str) -> str:
-    """노이즈 제거를 llm_utils.strip_llm_noise 로 위임하고
-    front-matter preamble 제거만 이 함수가 담당한다."""
     cleaned = strip_llm_noise(raw)
     cleaned = _strip_thinking_preamble(cleaned)
     return cleaned.strip()
@@ -172,7 +169,6 @@ def _ensure_keywords_present(refined: str, required_keywords: List[str]) -> str:
 
 class Refiner:
     def __init__(self, llm: LLMClientPort, augmenter: Optional[AugmenterPort] = None):
-        # DESIGN-B FIX: augmenter 타입을 AugmenterPort Protocol 로 명시
         self._llm = llm
         self._augmenter = augmenter
 
