@@ -1,8 +1,30 @@
-pydantic>=2.0
-PyYAML
-openai>=1.0
-requests
-tiktoken
-FlagEmbedding
-qdrant-client
-rank-bm25
+# requirements.txt
+
+# --- LLM \uc11c\ubc84 (\ub458 \uc911 \ud558\ub098\ub97c \uc120\ud0dd\ud558\uc5ec \uc124\uce58) ---
+# Apple Silicon MLX \uae30\ubc18 \ucd94\ub860 \uc11c\ubc84 (\uad8c\uc7a5)
+mlx-lm>=0.22.0
+
+# mlx-vllm (backend: mlx_vllm \uc0ac\uc6a9 \uc2dc \uc124\uce58, \ud604\uc7ac beta)
+# mlx-vllm>=0.0.1
+
+# --- OpenAI-compatible \ud074\ub77c\uc774\uc5b8\ud2b8 ---
+openai>=1.30.0
+
+# --- \uc784\ubca0\ub529 / Re-ranking ---
+FlagEmbedding>=1.2.0
+
+# --- \ubca1\ud130 DB ---
+qdrant-client>=1.9.0
+
+# --- BM25 \ud76c\uc18c \uac80\uc0c9 ---
+rank-bm25>=0.2.2
+
+# --- \uc124\uc815 / \ub370\uc774\ud130 \ubaa8\ub378 ---
+pydantic>=2.0.0
+PyYAML>=6.0
+
+# --- \ud5ec\uc2a4\uccac \uc694\uccad ---
+requests>=2.31.0
+
+# --- \uc120\ud0dd: \uc815\ud655\ud55c \ud1a0\ud070 \uce74\uc6b4\ud305 ---
+# tiktoken>=0.7.0
