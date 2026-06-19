@@ -3,9 +3,9 @@
 
 # --- LLM 클라이언트 접속 정보 -------------------------------------------
 model:
-  base_url: http://127.0.0.1:8000/v1   # server.managed=false 일 때 사용
+  base_url: http://127.0.0.1:8001/v1   # server.managed=false 일 때 사용
   api_key: sk-no-key-required
-  model_name: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
+  model_name: mlx-community/gemma-4-e2b-it-4bit
   max_tokens: 4096
   temperature: 0.1
   top_p: 0.9
@@ -13,10 +13,10 @@ model:
 # --- 서버 자동 기동 설정 ----------------------------------------------------
 server:
   managed: true
-  model_path: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
+  model_path: mlx-community/gemma-4-e2b-it-4bit
   host: 0.0.0.0
-  port: 8000
-  backend: mlx_lm        # mlx_lm | mlx_vllm
+  port: 8001
+  backend: mlx_vllm      # mlx_lm | mlx_vllm  ← mlx_vllm: gemma-4 아키텍처 지원
   trust_remote_code: false
   extra_args: []
   startup_timeout: 180
