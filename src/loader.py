@@ -88,6 +88,7 @@ def _build_chunks(
 
 
 def load_document(path: Path, max_chunk_tokens: int = 8000, overlap_tokens: int = 200) -> Document:
+    """단일 파일을 로드해 Document 로 변환한다."""
     text = _load_text(path)
     sections = _split_by_h2(text)
     chunks = _build_chunks(sections, path.name, max_chunk_tokens, overlap_tokens)
@@ -95,9 +96,51 @@ def load_document(path: Path, max_chunk_tokens: int = 8000, overlap_tokens: int 
 
 
 def load_all_documents(input_dir: str, max_chunk_tokens: int = 8000, overlap_tokens: int = 200) -> List[Document]:
+    """디렉토리 아래 모든 지원 파일을 재귀 로드한다."""
     base = Path(input_dir)
     docs: List[Document] = []
     for path in sorted(base.rglob("*")):
         if path.is_file() and path.suffix.lower() in _SUPPORTED_EXTENSIONS:
             docs.append(load_document(path, max_chunk_tokens, overlap_tokens))
     return docs
+
+
+class DocumentLoader:
+    """pipeline.py 가 사용하는 파일 로더 클래스.
+
+    내부적으로 load_document() / load_all_documents() 함수를 위임한다.
+
+    Args:
+        input_dir:        입력 디렉토리 경로
+        max_chunk_tokens: 청크 최대 토큰 수 (기본 8000)
+        overlap_tokens:   청크 간 오버랩 토큰 수 (기본 200)
+    """
+
+    def __init__(
+        self,
+        input_dir: str,
+        max_chunk_tokens: int = 8000,
+        overlap_tokens: int = 200,
+    ) -> None:
+        self._input_dir = input_dir
+        self._max_chunk_tokens = max_chunk_tokens
+        self._overlap_tokens = overlap_tokens
+
+    def load_all(self) -> List[Path]:
+        """지원 확장자 파일 경로 목록을 반환한다 (정렬, 재귀)."""
+        base = Path(self._input_dir)
+        return [
+            path
+            for path in sorted(base.rglob("*"))
+            if path.is_file() and path.suffix.lower() in _SUPPORTED_EXTENSIONS
+        ]
+
+    def load(self, path: Path) -> Document:
+        """단일 Path 를 Document 로 변환한다."""
+        return load_document(path, self._max_chunk_tokens, self._overlap_tokens)
+
+    def load_all_documents(self) -> List[Document]:
+        """모든 파일을 Document 리스트로 반환한다."""
+        return load_all_documents(
+            self._input_dir, self._max_chunk_tokens, self._overlap_tokens
+        )
