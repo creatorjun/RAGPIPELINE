@@ -15,15 +15,26 @@ class ModelConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
-    """LLM 서버 자동 기동 설정."""
+    """LLM 서버 자동 기동 설정.
+
+    backend 값:
+        - ``mlx_lm``   : Apple Silicon 전용. mlx_lm.server 사용.
+        - ``mlx_vllm`` : Apple Silicon 전용. mlx_vllm(vLLM 호환) 사용.
+        - ``vllm``     : x64 (CUDA / ROCm) 환경. 표준 vLLM API 서버 사용.
+    """
     managed: bool = True
     model_path: Optional[str] = None
     host: str = "0.0.0.0"
     port: int = 8000
-    backend: Literal["mlx_lm", "mlx_vllm"] = "mlx_lm"
+    backend: Literal["mlx_lm", "mlx_vllm", "vllm"] = "mlx_lm"
     trust_remote_code: bool = False
     extra_args: List[str] = Field(default_factory=list)
     startup_timeout: int = 180
+    # vllm 전용 옵션
+    dtype: str = "auto"          # vllm: float16 / bfloat16 / auto
+    gpu_memory_utilization: float = Field(default=0.90, ge=0.1, le=1.0)
+    tensor_parallel_size: int = Field(default=1, ge=1)
+    max_model_len: Optional[int] = None  # None → vllm 자동 감지
 
 
 class LoggingConfig(BaseModel):
