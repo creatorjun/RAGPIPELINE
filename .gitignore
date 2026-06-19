@@ -2,6 +2,7 @@ venv/
 env/
 build/
 dist/
+logs/
 as_is/
 to_be/
 __pycache__
