@@ -1,5 +1,5 @@
 # src/config.py
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -31,6 +31,12 @@ class PipelineConfig(BaseModel):
 class JudgeConfig(BaseModel):
     enabled: bool = True
     max_tokens: int = 1024
+    on_error: Literal["skip", "fail"] = "fail"
+    """JudgeError 발생 시 정책.
+    
+    - ``"fail"``  (default) — 판정 실패를 문서 실패로 처리한다.
+    - ``"skip"``            — 판정 실패를 무시하고 성공으로 진행한다.
+    """
 
 
 class DomainConfig(BaseModel):
