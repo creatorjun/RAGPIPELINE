@@ -54,7 +54,10 @@ class PipelineOrchestrator:
             searxng=searxng,
             enabled=config.search.enabled,
         )
-        self._filter = DomainFilter(self._llm)
+        self._filter = DomainFilter(
+            llm=self._llm,
+            valid_domains=config.get_domain_names(),
+        )
         self._refiner = Refiner(self._llm, augmenter=augmenter)
         self._structure_validator = StructureValidator(
             min_doc_length=config.pipeline.min_doc_length,
@@ -128,14 +131,14 @@ class PipelineOrchestrator:
                 return "skip"
 
             if filter_result.confidence < 0.7:
-                print(f"\n[WARN] {doc.source_file} — 분류 신뢰도 낮음: {filter_result.confidence:.2f}")
+                print(f"\n[WARN] {doc.source_file} \u2014 분류 신뢰도 낙음: {filter_result.confidence:.2f}")
 
             working_doc = doc
             if filter_result.is_partial:
                 log_entry["stage"] = "extract"
                 extracted = self._refiner.extract_domain_sections(doc, filter_result.domains)
                 if not extracted:
-                    print(f"\n[WARN] {doc.source_file} — 섹션 추출 결과 없음, 원본으로 폴백")
+                    print(f"\n[WARN] {doc.source_file} \u2014 섹션 추출 결과 없음, 원본으로 폴백")
                 else:
                     with tempfile.NamedTemporaryFile(
                         mode="w", suffix=".md", delete=False, encoding="utf-8"
@@ -172,7 +175,7 @@ class PipelineOrchestrator:
                         retry_hint=retry_hint,
                     )
                 except LLMEmptyResponseError as e:
-                    print(f"\n[ERROR] {doc.source_file} — LLM 빈 응답: {e}")
+                    print(f"\n[ERROR] {doc.source_file} \u2014 LLM 빈 응답: {e}")
                     if attempt < max_retries:
                         print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file}")
                         continue
@@ -184,7 +187,7 @@ class PipelineOrchestrator:
 
                 if not refined_text.strip():
                     if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — refine 결과 빈 문자열")
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 refine 결과 빈 문자열")
                         continue
                     log_entry["status"] = "fail"
                     log_entry["error"] = "refine 결과 빈 문자열"
@@ -194,12 +197,11 @@ class PipelineOrchestrator:
 
                 clean_text = strip_thinking(refined_text)
 
-                # --- Layer 1: 구조 검증 (룰셋) ---
                 log_entry["stage"] = "structure_validate"
                 struct_result = self._structure_validator.validate(clean_text)
                 if not struct_result.is_valid:
                     if attempt < max_retries:
-                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} — 구조 오류: {struct_result.errors}")
+                        print(f"[RETRY {attempt + 1}/{max_retries}] {doc.source_file} \u2014 구조 오류: {struct_result.errors}")
                         continue
                     log_entry["status"] = "fail"
                     log_entry["error"] = str(struct_result.errors)
@@ -207,7 +209,6 @@ class PipelineOrchestrator:
                     self._write_log(log_entry)
                     return "fail"
 
-                # --- Layer 2: 내용 검증 (Judge LLM) ---
                 if self._judge is not None:
                     log_entry["stage"] = "judge"
                     verdict = self._judge.judge(
@@ -259,7 +260,7 @@ class PipelineOrchestrator:
             log_entry["error"] = repr(exc)
             log_entry["duration_sec"] = (datetime.now(tz=timezone.utc) - start).total_seconds()
             self._write_log(log_entry)
-            print(f"\n[ERROR] {doc.source_file} — {exc}")
+            print(f"\n[ERROR] {doc.source_file} \u2014 {exc}")
             return "fail"
 
     def run(self, resume: Optional[bool] = None, dry_run: bool = False) -> None:
@@ -289,7 +290,7 @@ class PipelineOrchestrator:
                 print(f"[RESUME] 이미 완료된 문서 {len(skipped_names)}건 스킵")
 
         if dry_run:
-            print(f"[DRY-RUN] 실제 실행 없이 종료 — 처리 대상 {len(docs_to_process)}건")
+            print(f"[DRY-RUN] 실제 실행 없이 종료 \u2014 처리 대상 {len(docs_to_process)}건")
             for doc in docs_to_process:
                 print(f"  - {doc.source_file}")
             return
