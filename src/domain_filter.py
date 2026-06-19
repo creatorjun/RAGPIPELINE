@@ -1,8 +1,7 @@
 # src/domain_filter.py
-import json
-import re
 from typing import List, Optional, Set, Tuple
 
+from src.llm_utils import extract_json_object, strip_llm_noise
 from src.models import Document, FilterResult
 from src.ports import LLMClientPort
 
@@ -30,41 +29,22 @@ Rules:
 {content}"""
 
 
-def _extract_json_object(text: str) -> Optional[dict]:
-    start = text.find('{')
-    if start == -1:
-        return None
-    depth = 0
-    for i, ch in enumerate(text[start:], start=start):
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0:
-                candidate = text[start:i + 1]
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError:
-                    return None
-    return None
-
-
 def _parse_filter_response(
     response: str,
     valid_domains: Set[str],
 ) -> Tuple[List[str], float, bool]:
-    think_cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-    data = _extract_json_object(think_cleaned)
+    cleaned = strip_llm_noise(response)
+    data = extract_json_object(cleaned)
     if data is None:
         return [], 0.0, False
 
-    raw_domains = data.get('domains', [])
+    raw_domains = data.get("domains", [])
     if isinstance(raw_domains, str):
         raw_domains = [raw_domains]
     domains = [d for d in raw_domains if d in valid_domains]
 
-    confidence = float(data.get('confidence', 1.0))
-    is_partial = bool(data.get('is_partial', False))
+    confidence = float(data.get("confidence", 1.0))
+    is_partial = bool(data.get("is_partial", False))
     return domains, confidence, is_partial
 
 
@@ -86,7 +66,7 @@ class DomainFilter:
         try:
             raw = self._llm.generate(_SYSTEM_PROMPT, user_prompt)
         except Exception as exc:
-            print(f"[WARN] DomainFilter LLM 호출 실패 ({doc.source_file}): {exc}")
+            print(f"[WARN] DomainFilter LLM \ud638\ucd9c \uc2e4\ud328 ({doc.source_file}): {exc}")
             return FilterResult(domains=[], confidence=0.0, is_partial=False)
 
         domains, confidence, is_partial = _parse_filter_response(raw, self._valid_domains)
