@@ -1,19 +1,9 @@
 # src/llm_utils.py
-"""
-공통 LLM 출력 후처리 유틸리티.
-
-judge.py / search_augmenter.py / domain_filter.py 에 중복 정의되어 있던
-`_extract_json_object`, `_strip_llm_noise` 를 단일 모듈로 통합한다.
-"""
 from __future__ import annotations
 
 import json
 import re
 from typing import Optional
-
-# ---------------------------------------------------------------------------
-# Noise-stripping
-# ---------------------------------------------------------------------------
 
 _THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 _GENERIC_TAG_PATTERN = re.compile(r"<\|[^>]+>", re.DOTALL)
@@ -21,10 +11,14 @@ _CODEFENCE_PATTERN = re.compile(r"^```[^\n]*\n(.*?)```\s*$", re.DOTALL)
 _WEB_REF_TAG_PATTERN = re.compile(
     r"\[(?:\uc6f9 \ucc38\uc870|web ref)[^\]]*\]", re.IGNORECASE
 )
+_BARE_THINKING_PATTERNS = [
+    re.compile(r"^Expert technical editor\..*?(?=^---)", re.DOTALL | re.MULTILINE),
+    re.compile(r"^\*\s+\*.*?(?=^---)", re.DOTALL | re.MULTILINE),
+    re.compile(r"^(?:Let me|I will|I'll|First,|Step \d|Now,|Okay,|Sure,|Here is|The document).*?(?=^---)", re.DOTALL | re.MULTILINE),
+]
 
 
 def strip_llm_noise(text: str) -> str:
-    """LLM 응답에서 <think>...</think>, <|...|>, 코드 펜스 등 노이즈를 제거한다."""
     cleaned = _THINK_PATTERN.sub("", text)
     cleaned = _GENERIC_TAG_PATTERN.sub("", cleaned)
 
@@ -45,23 +39,20 @@ def strip_llm_noise(text: str) -> str:
     return cleaned
 
 
+def strip_bare_thinking(text: str) -> str:
+    for pattern in _BARE_THINKING_PATTERNS:
+        m = pattern.search(text)
+        if m and m.start() == 0:
+            text = text[m.end():]
+            break
+    return text.strip()
+
+
 def strip_web_ref_tags(text: str) -> str:
-    """[웹 참조 ...] / [web ref ...] 어노테이션 태그를 제거한다."""
     return _WEB_REF_TAG_PATTERN.sub("", text)
 
 
-# ---------------------------------------------------------------------------
-# JSON extraction
-# ---------------------------------------------------------------------------
-
-
 def extract_json_object(text: str) -> Optional[dict]:
-    """텍스트에서 첫 번째 완결된 JSON 오브젝트를 파싱해 반환한다.
-
-    LLM 이 JSON 앞뒤로 불필요한 텍스트를 출력하는 경우에도 동작하도록
-    중괄호 depth 카운팅으로 경계를 찾는다.
-    파싱 실패 시 None 을 반환한다.
-    """
     start = text.find("{")
     if start == -1:
         return None

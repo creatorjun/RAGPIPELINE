@@ -3,7 +3,7 @@ from datetime import date
 from typing import List, Optional
 import re
 
-from src.llm_utils import strip_llm_noise
+from src.llm_utils import strip_bare_thinking, strip_llm_noise
 from src.models import Document, DocumentChunk
 from src.ports import AugmenterPort, LLMClientPort
 
@@ -97,15 +97,28 @@ _YAML_FRONTMATTER_START = re.compile(
     r'(?m)^---[ \t]*\r?\n(?=[ \t]*title[ \t]*:)',
 )
 
+_STRUCTURE_HINT = (
+    "Output MUST start with --- (YAML front-matter). "
+    "Do NOT output any reasoning, planning, or explanation. "
+    "Begin your response with --- immediately."
+)
+
 
 def _strip_thinking_preamble(text: str) -> str:
+    text = strip_bare_thinking(text)
+
     m = _YAML_FRONTMATTER_START.search(text)
     if m:
         return text[m.start():]
+
     idx = text.find('---')
     if idx == -1:
         return text
     return text[idx:]
+
+
+def _has_valid_frontmatter(text: str) -> bool:
+    return bool(_YAML_FRONTMATTER_START.search(text.lstrip()))
 
 
 def _parse_llm_output(raw: str) -> str:
@@ -191,15 +204,20 @@ class Refiner:
         source_file: str,
         required_keywords: Optional[List[str]] = None,
         retry_hint: Optional[str] = None,
+        structure_failed: bool = False,
     ) -> str:
         today = date.today().isoformat()
         domains_yaml = "[\n" + "".join(f"    - {d}\n" for d in domains) + "  ]"
         kw_hint = ", ".join(required_keywords) if required_keywords else "extract from source"
-        retry_instruction = (
-            f"[PREVIOUS ATTEMPT FAILED \u2014 JUDGE FEEDBACK]\n{retry_hint}\n\nFix the above issue strictly.\n\n"
-            if retry_hint
-            else ""
-        )
+
+        hints: List[str] = []
+        if structure_failed:
+            hints.append(_STRUCTURE_HINT)
+        if retry_hint and retry_hint != "none":
+            hints.append(f"[PREVIOUS ATTEMPT FAILED — JUDGE FEEDBACK]\n{retry_hint}\n\nFix the above issue strictly.")
+
+        retry_instruction = ("\n\n".join(hints) + "\n\n") if hints else ""
+
         user_prompt = _REFINE_USER_TEMPLATE.format(
             domains_yaml=domains_yaml,
             source_file=source_file,
@@ -210,6 +228,22 @@ class Refiner:
         )
         raw = self._llm.generate(_REFINE_SYSTEM, user_prompt)
         result = _parse_llm_output(raw)
+
+        if not _has_valid_frontmatter(result):
+            forced_hint = _STRUCTURE_HINT
+            if retry_hint and retry_hint != "none":
+                forced_hint += f"\n\n[PREVIOUS ATTEMPT FAILED — JUDGE FEEDBACK]\n{retry_hint}\n\nFix the above issue strictly."
+            forced_prompt = _REFINE_USER_TEMPLATE.format(
+                domains_yaml=domains_yaml,
+                source_file=source_file,
+                today=today,
+                content=chunk.content,
+                required_keywords=kw_hint,
+                retry_instruction=forced_hint + "\n\n",
+            )
+            raw = self._llm.generate(_REFINE_SYSTEM, forced_prompt)
+            result = _parse_llm_output(raw)
+
         if required_keywords:
             result = _ensure_keywords_present(result, required_keywords)
         return result
@@ -219,6 +253,7 @@ class Refiner:
         doc: Document,
         domains: List[str],
         retry_hint: Optional[str] = None,
+        structure_failed: bool = False,
     ) -> str:
         required_keywords = _extract_original_keywords(doc)
         refined_chunks: List[str] = []
@@ -229,6 +264,7 @@ class Refiner:
                 doc.source_file,
                 required_keywords,
                 retry_hint=retry_hint,
+                structure_failed=structure_failed,
             )
             refined_chunks.append(refined)
 
