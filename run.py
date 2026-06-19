@@ -1,49 +1,140 @@
 #!/usr/bin/env python3
 # run.py
 """
-Phase 1\u00b72 \uc815\uc81c \ud30c\uc774\ud504\ub77c\uc778 \uc9c4\uc785\uc810.
+Phase 1·2 정제 파이프라인 진입점.
 
-\uc2e4\ud589 \ud750\ub984:
-    1. config.yaml \ub85c\ub4dc
-    2. server.managed=True \uc774\uba74 ModelServer \uc790\ub3d9 \uae30\ub3d9
+실행 흐름:
+    1. config.yaml 로드
+    2. server.managed=True 이면 ModelServer 자동 기동
     3. PipelineOrchestrator.run()
-    4. \uc815\uc0c1/\uc608\uc678 \uc885\ub8cc \uc2dc ModelServer.stop()
+    4. 정상/예외 종료 시 ModelServer.stop()
+
+CLI 예시::
+
+    # 프로덤션 실행 (config.yaml 설정 권한)
+    python run.py
+
+    # 테스트 실행 — gemma-4-E2B mlx_vllm, 포트 8001 자동 적용
+    python run.py --test
+
+    # dry-run: LLM 호출 없이 대상 목록만 확인
+    python run.py --test --dry-run
 """
+from __future__ import annotations
+
 import argparse
 import sys
+from dataclasses import dataclass
+from typing import Optional
 
 from src.config import AppConfig
 from src.model_server import ModelServer, ModelServerError
 from src.pipeline import PipelineOrchestrator
 
 
+# ---------------------------------------------------------------------------
+# 테스트 모드 프리셋
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TestPreset:
+    """--test 플래그 적용 시 사용할 고정 값."""
+    model_path: str = "google/gemma-4-E2B-it"
+    backend: str = "mlx_vllm"
+    port: int = 8001
+    max_tokens: int = 2048
+    startup_timeout: int = 120
+    # 테스트에서는 LLM 응답 로깅을 항상 활성화
+    llm_log_enabled: bool = True
+
+
+TEST_PRESET = TestPreset()
+
+
+# ---------------------------------------------------------------------------
+# CLI 파서
+# ---------------------------------------------------------------------------
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="RAG Pipeline \uc815\uc81c \uc2e4\ud589",
+        description="RAG Pipeline 정제 실행",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", default="config.yaml", help="\uc124\uc815 \ud30c\uc77c \uacbd\ub85c")
-    parser.add_argument("--no-resume", action="store_true", help="Resume \ubb34\uc2dc \ud6c4 \uc804\uccb4 \uc7ac\ucc98\ub9ac")
-    parser.add_argument("--dry-run", action="store_true", help="LLM \ud638\ucd9c \uc5c6\uc774 \ub300\uc0c1 \ubaa9\ub85d\ub9cc \ucd9c\ub825")
+    parser.add_argument(
+        "--config",
+        default="config.yaml",
+        help="설정 파일 경로",
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help=(
+            f"테스트 모드: {TEST_PRESET.model_path} 모델을 "
+            f"{TEST_PRESET.backend} 백엔드, 포트 {TEST_PRESET.port} 으로 기동"
+        ),
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Resume 무시 후 전체 재처리",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="LLM 호출 없이 대상 목록만 출력",
+    )
     parser.add_argument(
         "--backend",
         choices=["mlx_lm", "mlx_vllm"],
         default=None,
-        help="\uc11c\ubc84 \ubc31\uc5d4\ub4dc \uc6b0\uc120 (config.yaml server.backend \ub300\ube44 CLI \uc6b0\uc120)",
+        help="서버 백엔드 우선 (config.yaml server.backend 대비 CLI 우선)",
     )
     parser.add_argument(
         "--no-server",
         action="store_true",
-        help="\uc11c\ubc84 \uc790\ub3d9 \uae30\ub3d9 \uc2a4\ud0b5 (\uc678\ubd80\uc5d0\uc11c \uc774\ubbf8 \uc2e4\ud589 \uc911\uc778 \uc11c\ubc84 \uc0ac\uc6a9)",
+        help="서버 자동 기동 스킵 (외부에서 이미 실행 중인 서버 사용)",
     )
     return parser.parse_args()
 
+
+# ---------------------------------------------------------------------------
+# 테스트 모드 override 헬퍼
+# ---------------------------------------------------------------------------
+
+def _apply_test_preset(cfg: AppConfig, preset: TestPreset) -> None:
+    """테스트 프리셋 값을 cfg 에 사이드이폭트로 적용한다.
+
+    config.yaml 은 건드리지 않으므로, 테스트를
+    실행한 다음 원래 구성으로 돌아오고 싶으면
+    그냥 python run.py (기본모드)를 실행하면 된다.
+    """
+    cfg.server.model_path = preset.model_path
+    cfg.server.backend = preset.backend
+    cfg.server.port = preset.port
+    cfg.server.managed = True          # 테스트는 항상 자동 기동
+    cfg.server.startup_timeout = preset.startup_timeout
+    cfg.model.model_name = preset.model_path
+    cfg.model.max_tokens = preset.max_tokens
+    cfg.logging.llm_log_enabled = preset.llm_log_enabled
+
+
+# ---------------------------------------------------------------------------
+# 메인
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     args = _parse_args()
     cfg = AppConfig.from_yaml(args.config)
 
-    # CLI \uc778\uc218\ub85c server \uc124\uc815 \ub36e\uc5b4\uc4f0\uae30
+    # 1) 테스트 모드 우선 적용
+    if args.test:
+        _apply_test_preset(cfg, TEST_PRESET)
+        print(
+            f"[run] 테스트 모드: 모델={TEST_PRESET.model_path}  "
+            f"backend={TEST_PRESET.backend}  port={TEST_PRESET.port}"
+        )
+
+    # 2) 추가 CLI override (테스트 모드보다 나중에 적용되므로 우선순위 높음)
     if args.no_server:
         cfg.server.managed = False
     if args.backend:
@@ -63,7 +154,6 @@ def main() -> int:
 
     try:
         with server:
-            # \uc11c\ubc84 base_url \uc744 \uc2e4\uc81c \uac00\ub3d9 \uc8fc\uc18c\ub85c \ub36e
             cfg.model.base_url = server.base_url
             orchestrator = PipelineOrchestrator(cfg)
             orchestrator.run(
@@ -74,7 +164,7 @@ def main() -> int:
         print(f"\n[FATAL] {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("\n[INFO] \uc0ac\uc6a9\uc790 \uc911\ub2e8 (Ctrl+C)", file=sys.stderr)
+        print("\n[INFO] 사용자 중단 (Ctrl+C)", file=sys.stderr)
         return 130
 
     return 0
