@@ -1,20 +1,18 @@
 # src/domain_filter.py
 import json
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
-from src.llm_client import LLMClient
 from src.models import Document, FilterResult
+from src.ports import LLMClientPort
 
 _SYSTEM_PROMPT = """You are an internal technical document classifier.
 Output ONLY a valid JSON object. No other text."""
 
-_USER_TEMPLATE = """Classify the document below into one or more of the following 3 domains.
+_USER_TEMPLATE = """Classify the document below into one or more of the following domains.
 
 [Domain definitions]
-- build: construction, installation, deployment, design, infrastructure setup, environment configuration
-- maintenance: operations, monitoring, backup, tuning, optimization, routine checks
-- incident: failures, errors, recovery, rollback, RCA, incident response
+{domain_definitions}
 
 [Output format]
 {{
@@ -33,7 +31,6 @@ Rules:
 
 
 def _extract_json_object(text: str) -> Optional[dict]:
-    """JSON 객체를 중첩 brace를 고려해 안전하게 추출한다."""
     start = text.find('{')
     if start == -1:
         return None
@@ -52,7 +49,10 @@ def _extract_json_object(text: str) -> Optional[dict]:
     return None
 
 
-def _parse_filter_response(response: str) -> Tuple[List[str], float, bool]:
+def _parse_filter_response(
+    response: str,
+    valid_domains: Set[str],
+) -> Tuple[List[str], float, bool]:
     think_cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
     data = _extract_json_object(think_cleaned)
     if data is None:
@@ -61,8 +61,7 @@ def _parse_filter_response(response: str) -> Tuple[List[str], float, bool]:
     raw_domains = data.get('domains', [])
     if isinstance(raw_domains, str):
         raw_domains = [raw_domains]
-    valid = {'build', 'maintenance', 'incident'}
-    domains = [d for d in raw_domains if d in valid]
+    domains = [d for d in raw_domains if d in valid_domains]
 
     confidence = float(data.get('confidence', 1.0))
     is_partial = bool(data.get('is_partial', False))
@@ -70,17 +69,25 @@ def _parse_filter_response(response: str) -> Tuple[List[str], float, bool]:
 
 
 class DomainFilter:
-    def __init__(self, llm: LLMClient):
+    def __init__(self, llm: LLMClientPort, valid_domains: List[str]):
         self._llm = llm
+        self._valid_domains: Set[str] = set(valid_domains)
+        self._domain_definitions = "\n".join(
+            f"- {d}: document content related to the '{d}' domain"
+            for d in valid_domains
+        )
 
     def classify(self, doc: Document) -> FilterResult:
         preview = doc.content[:4000]
-        user_prompt = _USER_TEMPLATE.format(content=preview)
+        user_prompt = _USER_TEMPLATE.format(
+            domain_definitions=self._domain_definitions,
+            content=preview,
+        )
         try:
             raw = self._llm.generate(_SYSTEM_PROMPT, user_prompt)
         except Exception as exc:
             print(f"[WARN] DomainFilter LLM 호출 실패 ({doc.source_file}): {exc}")
             return FilterResult(domains=[], confidence=0.0, is_partial=False)
 
-        domains, confidence, is_partial = _parse_filter_response(raw)
+        domains, confidence, is_partial = _parse_filter_response(raw, self._valid_domains)
         return FilterResult(domains=domains, confidence=confidence, is_partial=is_partial)
