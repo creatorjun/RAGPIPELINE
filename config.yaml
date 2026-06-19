@@ -1,34 +1,28 @@
 # config.yaml
-# 전체 파이프라인 단일 진실 출처(Single Source of Truth)
 
-# --- LLM 클라이언트 접속 정보 -------------------------------------------
 model:
-  base_url: http://127.0.0.1:8001/v1   # server.managed=false 일 때 사용
+  base_url: http://127.0.0.1:8000/v1
   api_key: sk-no-key-required
-  model_name: mlx-community/gemma-4-e2b-it-4bit
+  model_name: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
   max_tokens: 4096
   temperature: 0.1
   top_p: 0.9
 
-# --- 서버 자동 기동 설정 ----------------------------------------------------
 server:
   managed: true
-  model_path: mlx-community/gemma-4-e2b-it-4bit
+  model_path: mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit
   host: 0.0.0.0
-  port: 8001
-  backend: mlx_lm       # mlx_lm | mlx_vllm | vllm
-                        # mlx_lm  : 텍스트 전용 Gemma-4 모델 (권장)
-                        # mlx_vllm: 비전+텍스트 겸용 VLM 전용 (mlx-vlm 패키지 필요)
-                        # vllm    : x64 CUDA/ROCm 환경
+  port: 8000
+  backend: vllm_mlx
+  api_key: sk-no-key-required
+  reasoning_parser: gemma4
   trust_remote_code: false
   extra_args: []
-  startup_timeout: 180
+  startup_timeout: 300
 
-# --- 로깅 설정 -----------------------------------------------------------------
 logging:
-  llm_log_enabled: true   # false 로 바꾸면 llm_*.log 생성 안 함
+  llm_log_enabled: true
 
-# --- 정제 파이프라인 설정 -------------------------------------------------
 pipeline:
   input_dir: ./as_is
   output_dir: ./to_be
@@ -42,21 +36,18 @@ pipeline:
   resume: true
   concurrency: 1
 
-# --- Judge LLM 설정 -------------------------------------------------------
 judge:
   enabled: true
   max_tokens: 1024
-  on_error: fail         # skip | fail
+  on_error: fail
   judge_input_chars: 6000
 
-# --- SearXNG 웹 검색 보강 (선택) ----------------------------------------
 search:
   enabled: false
   base_url: http://localhost:8080
   timeout: 10
   max_results: 5
 
-# --- 도메인 정의 -----------------------------------------------------------
 domains:
   - name: build
     output_folder: build
@@ -68,7 +59,6 @@ domains:
     output_folder: incident
     keywords: [장애, 에러, 복구, 롤백, RCA, 인시던트, 대응]
 
-# --- RAG 인덱싱 / 검색 설정 -------------------------------------------
 rag:
   embedding_model: BAAI/bge-m3
   qdrant_path: ./qdrant_db
