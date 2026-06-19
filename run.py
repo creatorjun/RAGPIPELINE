@@ -47,7 +47,7 @@ from src.pipeline import PipelineOrchestrator
 # ---------------------------------------------------------------------------
 
 def _is_macos() -> bool:
-    """현재 프로세스가 macOS(애플 실리콘 포함) 위에서 돹작 중이면 True."""
+    """현재 프로세스가 macOS(애플 실리콘 포함) 위에서 동작 중이면 True."""
     return platform.system() == "Darwin"
 
 
@@ -61,18 +61,22 @@ class PlatformPreset:
     model_path: str
     backend: str
     description: str
+    # --test 모드에서 사용할 경량 모델
+    test_model_path: str
 
 
 MACOS_PRESET = PlatformPreset(
     model_path="mlx-community/gemma-4-26b-a4b-it-4bit",
     backend="mlx_lm",
     description="macOS (Apple Silicon)",
+    test_model_path="mlx-community/gemma-4-e2b-it-4bit",
 )
 
 X64_PRESET = PlatformPreset(
     model_path="google/gemma-4-E2B-it-assistant",
     backend="vllm",
     description="x64 (Linux/Windows CUDA)",
+    test_model_path="google/gemma-4-E2B-it-assistant",
 )
 
 
@@ -89,8 +93,8 @@ def _platform_preset() -> PlatformPreset:
 class TestPreset:
     """--test 플래그 적용 시 사용할 고정 값.
 
-    모델 / 백엔드는 플랫폼 감지에서 자동 선택되므로
-    이 클래스에는 사이즈 / 포트 관련 고정값만 담는다.
+    모델 / 백엔드는 PlatformPreset.test_model_path 에서 자동 선택되므로
+    이 클래스에는 포트 관련 고정값만 담는다.
     """
     port: int = 8001
     max_tokens: int = 2048
@@ -119,8 +123,8 @@ def _parse_args() -> argparse.Namespace:
         "--test",
         action="store_true",
         help=(
-            f"\ud14c\uc2a4\ud2b8 \ubaa8\ub4dc: E2B \ubaa8\ub378\uc744 \ud3ec\ud2b8 {TEST_PRESET.port} "
-            "\uc73c\ub85c \uae30\ub3d9 (\ud50c\ub7ab\ud3fc\uc5d0 \ub530\ub77c \ubc31\uc5d4\ub4dc \uc790\ub3d9 \uc120\ud0dd)"
+            f"\ud14c\uc2a4\ud2b8 \ubaa8\ub4dc: \uacbd\ub7c9 E2B \ubaa8\ub378\uc744 \ud3ec\ud2b8 {TEST_PRESET.port} "
+            "\uc73c\ub85c \uae30\ub3d9 (\ud50c\ub7ab\ud3fc\uc5d0 \ub530\ub77c \ubaa8\ub378\u00b7\ubc31\uc5d4\ub4dc \uc790\ub3d9 \uc120\ud0dd)"
         ),
     )
     parser.add_argument(
@@ -162,21 +166,20 @@ def _apply_platform_preset(cfg: AppConfig, preset: PlatformPreset) -> None:
         cfg.server.model_path = preset.model_path
         cfg.model.model_name = preset.model_path
     if cfg.server.backend == "mlx_lm" and preset.backend != "mlx_lm":
-        # 기본값(mlx_lm)인 채로 사용자가 명시하지 않은 경우만 스와프
         cfg.server.backend = preset.backend
 
 
 def _apply_test_preset(cfg: AppConfig, preset: TestPreset, platform_preset: PlatformPreset) -> None:
     """테스트 프리셋 값을 cfg 에 적용한다.
 
-    모델 / 백엔드는 플랫폼 프리셋에서 가져오며,
-    테스트 포트·토큰 수 제한만 고정으로 스와프한다.
+    모델은 PlatformPreset.test_model_path 에서 가져온다.
+      - macOS : mlx-community/gemma-4-e2b-it-4bit  (MLX 양자화본)
+      - x64   : google/gemma-4-E2B-it-assistant    (vllm)
     """
-    # 테스트는 플랫폼에 상관없이 E2B 사용
-    # (사이즈가 작아서 빠르게 동작 확인하는 용도)
-    cfg.server.model_path = "google/gemma-4-E2B-it-assistant"
-    cfg.model.model_name = "google/gemma-4-E2B-it-assistant"
-    cfg.server.backend = platform_preset.backend  # 백엔드는 플랫폼에 적합하게
+    test_model = platform_preset.test_model_path
+    cfg.server.model_path = test_model
+    cfg.model.model_name = test_model
+    cfg.server.backend = platform_preset.backend
     cfg.server.port = preset.port
     cfg.server.managed = True
     cfg.server.startup_timeout = preset.startup_timeout
