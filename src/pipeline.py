@@ -69,13 +69,14 @@ class PipelineOrchestrator:
         )
         refiner = Refiner(llm=llm)
         structure_validator = StructureValidator()
+
+        # JudgeLLM 시그니처: (llm, max_tokens, judge_input_chars)
+        # enabled / on_error 는 JudgeLLM 에 없음 — enabled 여부는 pipeline 에서 관리
         judge: JudgeLLM | None = None
         if cfg.judge.enabled:
             judge = JudgeLLM(
                 llm=llm,
-                enabled=cfg.judge.enabled,
                 max_tokens=cfg.judge.max_tokens,
-                on_error=cfg.judge.on_error,
                 judge_input_chars=cfg.judge.judge_input_chars,
             )
 
