@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from openai import OpenAI
 
+from src.ports import LLMClientPort
+
 
 class LLMEmptyResponseError(RuntimeError):
     pass
 
 
-class LLMClient:
+class LLMClient(LLMClientPort):
     def __init__(
         self,
         base_url: str,
@@ -69,7 +71,6 @@ class LLMClient:
         user_prompt: str,
         prefix: str | None = None,
     ) -> str:
-        """일반 생성 호출 — 인스턴스 기본 파라미터 사용."""
         return self._call(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -87,12 +88,6 @@ class LLMClient:
         temperature: float = 0.0,
         max_tokens: int | None = None,
     ) -> str:
-        """
-        완전히 격리된 컨텍스트에서 단발성 호출을 수행한다.
-        - 새 OpenAI 클라이언트 인스턴스를 생성해 세션 상태를 공유하지 않는다.
-        - temperature 를 호출자가 명시적으로 지정한다 (Judge: 0.0 고정).
-        - 기존 generate() 호출의 대화 히스토리와 완전히 분리된다.
-        """
         isolated_client = OpenAI(base_url=self._base_url, api_key=self._api_key)
         return self._call(
             system_prompt=system_prompt,
