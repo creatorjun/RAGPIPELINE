@@ -1,10 +1,9 @@
 # src/search_augmenter.py
 from __future__ import annotations
 
-import json
-import re
 from typing import List
 
+from src.llm_utils import extract_json_object, strip_llm_noise, strip_web_ref_tags
 from src.ports import LLMClientPort
 from src.web_search import WebSearchClientPort
 
@@ -49,67 +48,28 @@ _AUGMENT_USER_TEMPLATE = """[기존 정제 문서]
 위 검색 결과를 참고하여 문서를 검토하고, 유용한 정보가 있으면 반영하세요. 없으면 원문 그대로 반환하세요.
 Output ONLY the document starting with ---"""
 
-_THINK_PATTERN = re.compile(r'<think>.*?</think>', re.DOTALL)
-_GENERIC_TAG_PATTERN = re.compile(r'<\|[^>]+>', re.DOTALL)
-_CODEFENCE_PATTERN = re.compile(r'^```[^\n]*\n(.*?)```\s*$', re.DOTALL)
-_WEB_REF_TAG_PATTERN = re.compile(r'\[(?:\uc6f9 \ucc38\uc870|web ref)[^\]]*\]', re.IGNORECASE)
-
 
 def _clean_augment_output(raw: str, fallback: str) -> str:
-    cleaned = _THINK_PATTERN.sub('', raw)
-    cleaned = _GENERIC_TAG_PATTERN.sub('', cleaned)
+    cleaned = strip_llm_noise(raw)
 
-    lines = cleaned.splitlines()
-    trimmed: list[str] = []
-    found = False
-    for line in lines:
-        if not found and line.strip() in ('', 'thought', 'model', 'user'):
-            continue
-        found = True
-        trimmed.append(line)
-    cleaned = '\n'.join(trimmed).strip()
-
-    m = _CODEFENCE_PATTERN.match(cleaned)
-    if m:
-        cleaned = m.group(1).strip()
-
-    idx = cleaned.find('---')
+    idx = cleaned.find("---")
     if idx == -1:
         return fallback
     candidate = cleaned[idx:]
-    if candidate.startswith('---\n') or candidate.startswith('---\r\n'):
+    if candidate.startswith("---\n") or candidate.startswith("---\r\n"):
         result = candidate.strip()
     else:
-        next_idx = cleaned.find('---', idx + 3)
+        next_idx = cleaned.find("---", idx + 3)
         if next_idx != -1:
             candidate2 = cleaned[next_idx:]
-            if candidate2.startswith('---\n') or candidate2.startswith('---\r\n'):
+            if candidate2.startswith("---\n") or candidate2.startswith("---\r\n"):
                 result = candidate2.strip()
             else:
                 return fallback
         else:
             return fallback
 
-    result = _WEB_REF_TAG_PATTERN.sub('', result)
-    return result
-
-
-def _extract_json_object(text: str) -> dict | None:
-    start = text.find('{')
-    if start == -1:
-        return None
-    depth = 0
-    for i, ch in enumerate(text[start:], start=start):
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1])
-                except json.JSONDecodeError:
-                    return None
-    return None
+    return strip_web_ref_tags(result)
 
 
 class SearchAugmenter:
@@ -119,11 +79,11 @@ class SearchAugmenter:
         self._enabled = enabled
 
     def _parse_judge(self, response: str) -> tuple[bool, list[str]]:
-        think_cleaned = _THINK_PATTERN.sub('', response)
-        data = _extract_json_object(think_cleaned)
+        cleaned = strip_llm_noise(response)
+        data = extract_json_object(cleaned)
         if data is None:
             return False, []
-        return bool(data.get('needs_search', False)), data.get('queries', [])
+        return bool(data.get("needs_search", False)), data.get("queries", [])
 
     def augment(self, refined_text: str, source_file: str) -> str:
         if not self._enabled:

@@ -1,12 +1,28 @@
 # src/judge.py
 from __future__ import annotations
 
-import json
-import re
 from typing import Optional
 
+from src.llm_utils import extract_json_object, strip_llm_noise
 from src.models import JudgeVerdict
 from src.ports import LLMClientPort
+
+# ---------------------------------------------------------------------------
+# Public exception — callers must handle or propagate
+# ---------------------------------------------------------------------------
+
+
+class JudgeError(RuntimeError):
+    """판정 LLM 호출 실패 또는 응답 파싱 실패 시 발생한다.
+    
+    Silent False-positive(판정 실패를 passed=True로 묵인)를 대신하여
+    호출측(pipeline.py)에서 명시적 정책을 채택하게 한다.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
 _JUDGE_SYSTEM = """You are a brutally critical technical document reviewer.
 Your sole purpose is to find flaws in a refined internal document.
@@ -52,32 +68,15 @@ _USER_TEMPLATE = """[ORIGINAL SOURCE DOCUMENT]
 
 Apply all evaluation criteria strictly. Output JSON only."""
 
-_THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
-_GENERIC_TAG_PATTERN = re.compile(r"<\|[^>]+>", re.DOTALL)
 
-
-def _extract_json_object(text: str) -> Optional[dict]:
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    for i, ch in enumerate(text[start:], start=start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start : i + 1])
-                except json.JSONDecodeError:
-                    return None
-    return None
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def _parse_verdict(raw: str) -> Optional[JudgeVerdict]:
-    cleaned = _THINK_PATTERN.sub("", raw)
-    cleaned = _GENERIC_TAG_PATTERN.sub("", cleaned)
-    data = _extract_json_object(cleaned)
+    cleaned = strip_llm_noise(raw)
+    data = extract_json_object(cleaned)
     if data is None:
         return None
     try:
@@ -93,7 +92,18 @@ def _parse_verdict(raw: str) -> Optional[JudgeVerdict]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Public class
+# ---------------------------------------------------------------------------
+
+
 class JudgeLLM:
+    """LLM 기반 정제 문서 판정기.
+
+    호출 실패 또는 JSON 파싱 실패 시 ``JudgeError`` 예외를 발생한다.
+    파이프라인에서 *skip* 할지 *fail* 시킬지는 호출측이 결정한다.
+    """
+
     def __init__(self, llm: LLMClientPort, max_tokens: int = 1024):
         self._llm = llm
         self._max_tokens = max_tokens
@@ -104,11 +114,10 @@ class JudgeLLM:
         refined_text: str,
         source_file: str = "",
     ) -> JudgeVerdict:
-        original_preview = original_text[:6000]
-        refined_preview = refined_text[:6000]
+        """Raise JudgeError if the LLM call or response parsing fails."""
         user_prompt = _USER_TEMPLATE.format(
-            original=original_preview,
-            refined=refined_preview,
+            original=original_text[:6000],
+            refined=refined_text[:6000],
         )
         try:
             raw = self._llm.generate_isolated(
@@ -118,26 +127,14 @@ class JudgeLLM:
                 max_tokens=self._max_tokens,
             )
         except Exception as exc:
-            print(f"[JUDGE WARN] LLM 호출 실패 ({source_file}): {exc}")
-            return JudgeVerdict(
-                passed=True,
-                faithfulness=True,
-                completeness=True,
-                structure_ok=True,
-                critique="Judge LLM unavailable \u2014 skipped",
-                retry_hint="none",
-            )
+            raise JudgeError(
+                f"Judge LLM 호출 실패 ({source_file}): {exc}"
+            ) from exc
 
         verdict = _parse_verdict(raw)
         if verdict is None:
-            print(f"[JUDGE WARN] JSON 파싱 실패 ({source_file}), raw={raw[:200]}")
-            return JudgeVerdict(
-                passed=True,
-                faithfulness=True,
-                completeness=True,
-                structure_ok=True,
-                critique="Judge parse error \u2014 skipped",
-                retry_hint="none",
+            raise JudgeError(
+                f"Judge JSON 파싱 실패 ({source_file}), raw={raw[:200]!r}"
             )
 
         return verdict
