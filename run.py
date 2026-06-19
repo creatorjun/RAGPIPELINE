@@ -29,7 +29,7 @@ MACOS_PRESET = PlatformPreset(
     model_path="mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit",
     backend="vllm_mlx",
     description="macOS (Apple Silicon)",
-    test_model_path="mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit",
+    test_model_path="mlx-community/gemma-4-e2b-it-4bit",
 )
 
 X64_PRESET = PlatformPreset(
@@ -65,7 +65,7 @@ def _parse_args() -> argparse.Namespace:
         "--test",
         action="store_true",
         help=(
-            f"\ud14c\uc2a4\ud2b8 \ubaa8\ub4dc: \ud3ec\ud2b8 {TEST_PRESET.port} "
+            f"\ud14c\uc2a4\ud2b8 \ubaa8\ub4dc: \uacbd\ub7c9 E2B \ubaa8\ub378\uc744 \ud3ec\ud2b8 {TEST_PRESET.port} "
             "\uc73c\ub85c \uae30\ub3d9 (\ubc31\uc5d4\ub4dc\ub294 config.yaml \ub610\ub294 --backend \uc73c\ub85c \uc9c0\uc815)"
         ),
     )
